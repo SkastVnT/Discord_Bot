@@ -50,8 +50,8 @@ if (ffmpeg) process.env.FFMPEG_PATH = ffmpeg;
 
 // ===========================================
 const TOKEN = process.env.TOKEN;
-const CLIENT_ID = "";
-const GUILD_ID = "";
+const CLIENT_ID = "1046784301615812649";
+const GUILD_ID = "912280384471982091";
 const LOAD_SLASH = process.argv[2] === "load";
 
 const client = new Client({
@@ -164,4 +164,5 @@ playerManager.on("playerDestroy", (player) => {
 });
 
 // ===========================================
+playerManager.on("debug",console.log);
 client.login(TOKEN);

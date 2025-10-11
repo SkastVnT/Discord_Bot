@@ -82,7 +82,7 @@ export default {
       // ✅ Tạo hoặc lấy queue hiện có
       let player = getPlayer(interaction.guildId);
       if (!player) {
-        player = getManager().create(interaction.guildId, {
+        player = await getManager().create(interaction.guildId, {
           userdata: {
             channel: interaction.channel,
           },
