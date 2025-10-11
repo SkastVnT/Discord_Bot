@@ -7,7 +7,8 @@ import {
 } from "discord.js";
 import { ViFontfetchInteraction, ViFonttrim } from "../ViFont.js";
 import { extractSongTitle, setSyncedLyrics } from "./lyrics.js";
-import { QueueRepeatMode } from "discord-player";
+import { getPlayer } from "ziplayer";
+import { lyricsExt } from "@ziplayer/extension";
 
 export default {
   data: new SlashCommandBuilder()
@@ -17,19 +18,19 @@ export default {
   async run({ client, interaction }) {
     const msg = await ViFontfetchInteraction(interaction);
 
-    const queue = client.player.queues.get(interaction.guildId);
-    if (!queue || !queue.isPlaying()) {
+    const player = getPlayer(interaction.guildId);
+    if (!player || !player.isPlaying) {
       return interaction.editReply("❌ Không có bài hát nào đang phát!");
     }
 
-    const track = queue.currentTrack;
+    const track = player.currentTrack;
     const authorName = track.author?.toLowerCase() || "";
     const cleanedTitle = extractSongTitle(track.title, authorName);
-
+    const lyricsExt = new lyricsExt();
     // 🔍 Tìm lyrics
     let results;
     try {
-      results = await client.player.lyrics.search(`${cleanedTitle} ${authorName}`);
+      results = await lyricsExt.fetch(`${cleanedTitle} ${authorName}`);
     } catch (err) {
       console.log("Lyrics search error:", err);
     }
@@ -43,7 +44,7 @@ export default {
 
     if (!lyrics?.plainLyrics && !lyrics?.syncedLyrics) {
       try {
-        const fallback = await client.player.lyrics.search(cleanedTitle);
+        const fallback = await player.lyrics.search(cleanedTitle);
         lyrics = fallback?.[0];
       } catch (e) {
         console.log(e);
@@ -69,7 +70,10 @@ export default {
     await setSyncedLyrics(queue, controlMessage, synced);
 
     synced?.onChange(async (line, time) => {
-      const progress = queue.node.createProgressBar({ timecodes: true, length: 18 });
+      const progress = queue.node.createProgressBar({
+        timecodes: true,
+        length: 18,
+      });
       const timeFmt = new Date(time).toISOString().substr(14, 5);
       embed.setDescription(
         `🎵 **${track.title}**\n\n${progress}\n\n🕒 [${timeFmt}]\n**${line}**`
@@ -82,22 +86,42 @@ export default {
 
     // 🎚️ Các nút điều khiển
     const mainControls = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("back").setEmoji("⏮️").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId("back")
+        .setEmoji("⏮️")
+        .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
         .setCustomId("pause_resume")
         .setEmoji(queue.node.isPaused() ? "▶️" : "⏸️")
         .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("skip").setEmoji("⏭️").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId("loop").setEmoji("🔁").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("shuffle").setEmoji("🔀").setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder()
+        .setCustomId("skip")
+        .setEmoji("⏭️")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId("loop")
+        .setEmoji("🔁")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("shuffle")
+        .setEmoji("🔀")
+        .setStyle(ButtonStyle.Secondary)
     );
 
     const secondaryControls = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("lyrics_popup").setLabel("📜 Lyrics").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("queue_popup").setLabel("📄 Queue").setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder()
+        .setCustomId("lyrics_popup")
+        .setLabel("📜 Lyrics")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("queue_popup")
+        .setLabel("📄 Queue")
+        .setStyle(ButtonStyle.Secondary)
     );
 
-    await controlMessage.edit({ components: [mainControls, secondaryControls] });
+    await controlMessage.edit({
+      components: [mainControls, secondaryControls],
+    });
 
     // 🧩 Collector để bắt hành động của user
     const collector = interaction.channel.createMessageComponentCollector({
@@ -106,8 +130,7 @@ export default {
     });
 
     collector.on("collect", async (btn) => {
-      const queue = client.player.queues.get(interaction.guildId);
-      if (!queue) {
+      if (!player) {
         return btn.reply({
           content: "❌ Không có bài hát nào đang phát!",
           ephemeral: true,
@@ -116,9 +139,9 @@ export default {
 
       switch (btn.customId) {
         case "pause_resume":
-          queue.node.setPaused(!queue.node.isPaused());
+          !player.isPaused ? player.pause() : player.resume();
           await btn.reply({
-            content: queue.node.isPaused()
+            content: player.isPaused
               ? "⏸️ Đã tạm dừng phát nhạc"
               : "▶️ Tiếp tục phát nhạc",
             ephemeral: true,
@@ -126,7 +149,7 @@ export default {
           break;
 
         case "skip":
-          await queue.node.skip();
+          await player.skip();
           await btn.reply({
             content: "⏭️ Đã chuyển sang bài kế tiếp",
             ephemeral: true,
@@ -134,8 +157,8 @@ export default {
           break;
 
         case "back":
-          if (queue.history?.hasPrevious()) {
-            await queue.history.previous();
+          if (player.previousTrack) {
+            await player.previous();
             await btn.reply({
               content: "⏮️ Quay lại bài hát trước",
               ephemeral: true,
@@ -149,7 +172,7 @@ export default {
           break;
 
         case "shuffle":
-          queue.tracks.shuffle();
+          player.shuffle();
           await btn.reply({
             content: "🔀 Đã trộn ngẫu nhiên danh sách phát!",
             ephemeral: true,
@@ -157,14 +180,11 @@ export default {
           break;
 
         case "loop":
-          const newMode =
-            queue.repeatMode === QueueRepeatMode.TRACK
-              ? QueueRepeatMode.OFF
-              : QueueRepeatMode.TRACK;
-          queue.setRepeatMode(newMode);
+          const newMode = player.loop === "track" ? "off" : "track";
+          player.loop(newMode);
           await btn.reply({
             content:
-              newMode === QueueRepeatMode.TRACK
+              newMode === "track"
                 ? "🔁 Bật chế độ lặp lại bài hát hiện tại!"
                 : "➡️ Đã tắt chế độ lặp lại",
             ephemeral: true,

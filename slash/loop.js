@@ -1,11 +1,11 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
-import { QueueRepeatMode } from "discord-player";
+import { getPlayer } from "ziplayer";
 
 export default {
   data: new SlashCommandBuilder()
     .setName("loop")
     .setDescription("🔁 Bật hoặc tắt chế độ lặp lại bài hát / playlist")
-    .addStringOption(option =>
+    .addStringOption((option) =>
       option
         .setName("mode")
         .setDescription("Chọn kiểu lặp lại")
@@ -18,10 +18,12 @@ export default {
     ),
 
   async run({ client, interaction }) {
-    const queue = client.player.nodes.get(interaction.guildId);
+    const player = getPlayer(interaction.guildId);
 
-    if (!queue || !queue.node.isPlaying()) {
-      return interaction.editReply("❌ Không có bài hát nào đang phát để lặp lại!");
+    if (!player || !player.isPlaying) {
+      return interaction.editReply(
+        "❌ Không có bài hát nào đang phát để lặp lại!"
+      );
     }
 
     const mode = interaction.options.getString("mode");
@@ -29,23 +31,23 @@ export default {
 
     switch (mode) {
       case "single":
-        repeatMode = QueueRepeatMode.TRACK;
+        repeatMode = "track";
         break;
       case "playlist":
-        repeatMode = QueueRepeatMode.QUEUE;
+        repeatMode = "queue";
         break;
       case "off":
       default:
-        repeatMode = QueueRepeatMode.OFF;
+        repeatMode = "off";
         break;
     }
 
-    queue.setRepeatMode(repeatMode);
+    player.loop(repeatMode);
 
     const msg =
-      repeatMode === QueueRepeatMode.TRACK
+      repeatMode === "track"
         ? "🎵 Lặp lại bài hát hiện tại"
-        : repeatMode === QueueRepeatMode.QUEUE
+        : repeatMode === "queue"
         ? "🎶 Lặp lại toàn bộ playlist"
         : "🛑 Đã tắt chế độ lặp";
 

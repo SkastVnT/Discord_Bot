@@ -1,4 +1,5 @@
 import { SlashCommandBuilder } from "discord.js";
+import { getPlayer } from "ziplayer";
 
 export default {
   data: new SlashCommandBuilder()
@@ -6,12 +7,12 @@ export default {
     .setDescription("▶️ Tiếp tục phát nhạc"),
 
   async run({ client, interaction }) {
-    const queue = client.player.nodes.get(interaction.guildId);
+    const player = getPlayer(interaction.guildId);
 
-    if (!queue || !queue.node.isPaused())
+    if (!player || !player.isPaused)
       return interaction.editReply("❌ Không có bài hát nào đang bị tạm dừng!");
 
-    queue.node.resume();
+    player.resume();
     await interaction.editReply("▶️ Tiếp tục phát nhạc!");
   },
 };

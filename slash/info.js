@@ -1,4 +1,5 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
+import { getPlayer } from "ziplayer";
 
 export default {
   data: new SlashCommandBuilder()
@@ -6,15 +7,15 @@ export default {
     .setDescription("📀 Hiển thị thông tin bài hát đang phát"),
 
   async run({ client, interaction }) {
-    const queue = client.player.nodes.get(interaction.guildId);
+    const player = getPlayer(interaction.guildId);
 
-    if (!queue || !queue.node.isPlaying()) {
+    if (!player || !player.isPlaying) {
       return interaction.editReply("❌ Không có bài hát nào đang phát!");
     }
 
-    const track = queue.currentTrack;
+    const track = player.currentTrack;
 
-    const progress = queue.node.createProgressBar({
+    const progress = player.getProgressBar({
       timecodes: true,
       length: 20,
     });
@@ -25,10 +26,22 @@ export default {
       .setDescription(`**[${track.title}](${track.url})**`)
       .setThumbnail(track.thumbnail)
       .addFields(
-        { name: "👤 Ca sĩ / Tác giả", value: track.author || "Không rõ", inline: true },
+        {
+          name: "👤 Ca sĩ / Tác giả",
+          value: track.author || "Không rõ",
+          inline: true,
+        },
         { name: "⏱️ Thời lượng", value: track.duration, inline: true },
-        { name: "📡 Nguồn", value: track.source || "Không xác định", inline: true },
-        { name: "🧍‍♂️ Người yêu cầu", value: `${track.requestedBy}`, inline: true },
+        {
+          name: "📡 Nguồn",
+          value: track.source || "Không xác định",
+          inline: true,
+        },
+        {
+          name: "🧍‍♂️ Người yêu cầu",
+          value: `${track.requestedBy}`,
+          inline: true,
+        }
       )
       .addFields({ name: "▶️ Tiến trình", value: `\`\`\`${progress}\`\`\`` })
       .setFooter({ text: "🎧 Hãy thưởng thức âm nhạc nào~" })

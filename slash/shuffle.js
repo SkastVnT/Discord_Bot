@@ -1,4 +1,5 @@
 import { SlashCommandBuilder } from "discord.js";
+import { getPlayer } from "ziplayer";
 
 export default {
   data: new SlashCommandBuilder()
@@ -6,12 +7,16 @@ export default {
     .setDescription("🔀 Trộn ngẫu nhiên danh sách chờ"),
 
   async run({ client, interaction }) {
-    const queue = client.player.nodes.get(interaction.guildId);
+    const player = getPlayer(interaction.guildId);
 
-    if (!queue || !queue.tracks.size)
-      return interaction.editReply("❌ Không có bài hát nào trong danh sách chờ!");
+    if (!player || !player.queue.tracks.size)
+      return interaction.editReply(
+        "❌ Không có bài hát nào trong danh sách chờ!"
+      );
 
-    queue.tracks.shuffle();
-    await interaction.editReply(`🔀 Danh sách gồm ${queue.tracks.size} bài hát đã được trộn ngẫu nhiên!`);
+    player.shuffle();
+    await interaction.editReply(
+      `🔀 Danh sách gồm ${player.queue.tracks.size} bài hát đã được trộn ngẫu nhiên!`
+    );
   },
 };

@@ -1,4 +1,5 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
+import { getPlayer } from "ziplayer";
 
 export default {
   data: new SlashCommandBuilder()
@@ -6,14 +7,14 @@ export default {
     .setDescription("⏭️ Bỏ qua bài hát hiện tại"),
 
   async run({ client, interaction }) {
-    const queue = client.player.nodes.get(interaction.guildId);
+    const player = getPlayer(interaction.guildId);
 
-    if (!queue || !queue.node.isPlaying()) {
+    if (!player || !player.isPlaying) {
       return interaction.editReply("❌ Không có bài hát nào để bỏ qua!");
     }
 
-    const current = queue.currentTrack;
-    await queue.node.skip();
+    const current = player.currentTrack;
+    await player.skip();
 
     const embed = new EmbedBuilder()
       .setColor("Orange")

@@ -1,10 +1,11 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
+import { getPlayer } from "ziplayer";
 
 export default {
   data: new SlashCommandBuilder()
     .setName("skipto")
     .setDescription("⏩ Chuyển đến bài hát theo số thứ tự")
-    .addNumberOption(option =>
+    .addNumberOption((option) =>
       option
         .setName("tracknumber")
         .setDescription("Số thứ tự bài hát trong danh sách chờ")
@@ -13,17 +14,19 @@ export default {
     ),
 
   async run({ client, interaction }) {
-    const queue = client.player.nodes.get(interaction.guildId);
+    const player = getPlayer(interaction.guildId);
 
-    if (!queue || !queue.tracks.size)
-      return interaction.editReply("❌ Không có bài hát nào trong danh sách chờ!");
+    if (!player || !player.queue.tracks.size)
+      return interaction.editReply(
+        "❌ Không có bài hát nào trong danh sách chờ!"
+      );
 
     const num = interaction.options.getNumber("tracknumber");
-    if (num > queue.tracks.size)
+    if (num > player.queue.tracks.size)
       return interaction.editReply("⚠️ Số bài hát không hợp lệ!");
 
-    await queue.node.skipTo(num - 1);
-    const track = queue.currentTrack;
+    await player.skip(num - 1);
+    const track = player.currentTrack;
 
     const embed = new EmbedBuilder()
       .setColor("Green")

@@ -1,4 +1,5 @@
 import { SlashCommandBuilder } from "discord.js";
+import { getPlayer } from "ziplayer";
 
 export default {
   data: new SlashCommandBuilder()
@@ -6,16 +7,18 @@ export default {
     .setDescription("⏮️ Quay lại bài hát trước đó"),
 
   async run({ client, interaction }) {
-    const queue = client.player.nodes.get(interaction.guildId);
+    const player = getPlayer(interaction.guildId);
 
-    if (!queue || !queue.node.isPlaying()) {
+    if (!player || !player.isPlaying) {
       return interaction.editReply("❌ Không có bài hát nào đang phát!");
     }
 
-    const success = await queue.history.back();
+    const success = await player.previous();
 
     if (!success) {
-      return interaction.editReply("⚠️ Không có bài hát trước đó trong lịch sử!");
+      return interaction.editReply(
+        "⚠️ Không có bài hát trước đó trong lịch sử!"
+      );
     }
 
     await interaction.editReply("⏮️ Đang phát lại bài hát trước đó!");

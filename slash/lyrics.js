@@ -1,13 +1,15 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import lyricsFinder from "lyrics-finder";
 import { ViFonttrim } from "../ViFont.js";
+import { getPlayer } from "ziplayer";
+import { lyricsExt } from "@ziplayer/extension";
 
 /**
  * Trích xuất tiêu đề bài hát từ title và artist
  */
 export function extractSongTitle(title, artist = "") {
   const normalizedArtist = artist.toLowerCase().trim();
-  const parts = title.split(/[-|[\]()]/).map(s => s.trim());
+  const parts = title.split(/[-|[\]()]/).map((s) => s.trim());
   for (const p of parts) {
     if (
       p &&
@@ -55,23 +57,29 @@ export default {
     ),
 
   async run({ client, interaction }) {
-    const queue = client.player.nodes.get(interaction.guildId);
+    const lyricsExt = new lyricsExt();
+    const player = getPlayer(interaction.guildId);
     const songName =
       interaction.options.getString("name") ||
-      queue?.currentTrack?.title ||
+      player?.currentTrack?.title ||
       null;
 
     if (!songName)
-      return interaction.editReply("❌ Không tìm thấy bài hát đang phát hoặc tên không hợp lệ.");
+      return interaction.editReply(
+        "❌ Không tìm thấy bài hát đang phát hoặc tên không hợp lệ."
+      );
 
     await interaction.editReply("🔍 Đang tìm lời bài hát...");
 
     try {
-      const lyrics = (await lyricsFinder(songName)) || "Không tìm thấy lời bài hát.";
+      const lyrics =
+        (await lyricsExt.fetch(songName)) ||
+        (await lyricsFinder(songName)) ||
+        "Không tìm thấy lời bài hát.";
       const embed = new EmbedBuilder()
         .setColor("Random")
         .setTitle(`🎵 Lời bài hát: ${songName}`)
-        .setDescription(ViFonttrim(lyrics, 4000))
+        .setDescription(ViFonttrim(lyrics?.text || lyrics, 4000))
         .setTimestamp();
 
       await interaction.editReply({ embeds: [embed] });

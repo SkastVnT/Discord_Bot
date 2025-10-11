@@ -5,6 +5,7 @@ export default {
     .setName("8d")
     .setDescription("Bật/tắt hiệu ứng âm thanh 8D xoay quanh đầu bạn"),
   async run(interaction, client) {
+    return interaction.editReply("❌ Hiệu ứng 8D không còn được hỗ trợ!");
     await interaction.deferReply();
     const queue = client.player.nodes.get(interaction.guildId);
 

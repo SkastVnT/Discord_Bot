@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
-import { QueryType } from "discord-player";
+import { getManager, getPlayer } from "ziplayer";
 
 /**
  * Chuẩn hóa link YouTube rút gọn (youtu.be → youtube.com/watch?v=)
@@ -19,8 +19,10 @@ function normalizeYouTubeUrl(url) {
 export default {
   data: new SlashCommandBuilder()
     .setName("testlink")
-    .setDescription("🧪 Kiểm tra một liên kết có phát được hay không qua tất cả subcommand của /play")
-    .addStringOption(option =>
+    .setDescription(
+      "🧪 Kiểm tra một liên kết có phát được hay không qua tất cả subcommand của /play"
+    )
+    .addStringOption((option) =>
       option
         .setName("url")
         .setDescription("Liên kết nhạc bạn muốn kiểm tra")
@@ -34,28 +36,27 @@ export default {
     await interaction.deferReply();
 
     const tests = [
-      { name: "/play song", queryType: QueryType.YOUTUBE_VIDEO },
-      { name: "/play playlist", queryType: QueryType.YOUTUBE_PLAYLIST },
-      { name: "/play search", queryType: QueryType.YOUTUBE_SEARCH },
-      { name: "/play soundcloud", queryType: QueryType.SOUNDCLOUD },
-      { name: "/play spotify", queryType: QueryType.SPOTIFY },
-      { name: "/play spotifyalbum", queryType: QueryType.SPOTIFY_ALBUM },
+      { name: "/play song", queryType: "youtube_video" },
+      { name: "/play playlist", queryType: "youtube_playlist" },
+      { name: "/play search", queryType: "youtube_search" },
+      { name: "/play soundcloud", queryType: "soundcloud_search" },
+      { name: "/play spotify", queryType: "spotify_search" },
+      { name: "/play spotifyalbum", queryType: "spotify_album" },
     ];
 
     const results = [];
 
     for (const test of tests) {
       try {
-        const result = await client.player.search(url, {
-          requestedBy: interaction.user,
-          searchEngine: test.queryType,
-        });
+        const result = await getManager().search(url, interaction.user);
 
-        if (!result || !result.tracks || result.tracks.size === 0) {
+        if (!result || !result.tracks || result.tracks.length === 0) {
           results.push(`❌ **${test.name}** → Không phát được`);
         } else {
-          const firstTrack = result.tracks.at(0);
-          results.push(`✅ **${test.name}** → ${firstTrack.title || "Phát được"}`);
+          const firstTrack = result.tracks?.[0];
+          results.push(
+            `✅ **${test.name}** → ${firstTrack.title || "Phát được"}`
+          );
         }
       } catch (err) {
         results.push(`⚠️ **${test.name}** → Lỗi: ${err.message}`);
