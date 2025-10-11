@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
-import { getPlayer } from "ziplayer";
+import { getManager } from "ziplayer";
 
 export default {
   data: new SlashCommandBuilder()
@@ -13,21 +13,22 @@ export default {
     ),
 
   async run({ client, interaction }) {
-    const player = getPlayer(interaction.guildId);
-    if (!player || !player.isPlaying) {
-      return interaction.editReply(
-        "❌ Không có bài hát nào trong danh sách chờ!"
-      );
+    const manager = getManager();
+    const player = manager.players.get(interaction.guildId);
+
+    if (!player || !player.playing) {
+      return interaction.channel.send("❌ Không có bài hát nào trong danh sách chờ!");
     }
 
-    const tracks = player.queue.tracks.toArray();
+    const tracks = Array.isArray(player.queue.tracks)
+      ? player.queue.tracks
+      : Array.from(player.queue.tracks || []);
+
     const totalPages = Math.ceil(tracks.length / 10) || 1;
     const page = (interaction.options.getNumber("page") || 1) - 1;
 
     if (page >= totalPages) {
-      return interaction.editReply(
-        `⚠️ Chỉ có ${totalPages} trang danh sách chờ.`
-      );
+      return interaction.channel.send(`⚠️ Chỉ có ${totalPages} trang danh sách chờ.`);
     }
 
     const current = player.currentTrack;
@@ -36,7 +37,7 @@ export default {
       .map(
         (t, i) =>
           `**${page * 10 + i + 1}.** \`[${t.duration}]\` ${t.title} — <@${
-            t.requestedBy.id
+            t.requestedBy?.id || "?"
           }>`
       )
       .join("\n");
@@ -53,6 +54,6 @@ export default {
       .setFooter({ text: `Trang ${page + 1}/${totalPages}` })
       .setThumbnail(current?.thumbnail || null);
 
-    await interaction.editReply({ embeds: [embed] });
+    await interaction.channel.send({ embeds: [embed] });
   },
 };
