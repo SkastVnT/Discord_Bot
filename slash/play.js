@@ -82,7 +82,7 @@ export default {
       // ✅ Tạo hoặc lấy queue hiện có
       let player = getPlayer(interaction.guildId);
       if (!player) {
-        player = getManager().create(interaction.guildId, {
+        player = await getManager().create(interaction.guildId, {
           userdata: {
             channel: interaction.channel,
           },
@@ -138,9 +138,11 @@ export default {
 
       const embed = new EmbedBuilder().setColor(0x00ff99);
 
+      const fallstatus = await player.play(result.tracks[0]);
+      if (!fallstatus) return interaction.editReply("❌ Không thể phát nhạc!");
       // ✅ Playlist
       if (result.playlist) {
-        player.insert(result.tracks, 0, interaction.user);
+        player.queue.addMultiple(result.tracks.slice(1));
         embed
           .setTitle("📀 Playlist đã thêm vào hàng chờ")
           .setDescription(
@@ -150,16 +152,13 @@ export default {
           .setFooter({ text: `${result.tracks.length} bài hát` });
       } else {
         const track = result.tracks?.[0];
-        player.insert(track, 0, interaction.user);
         embed
           .setTitle("🎶 Đã thêm vào hàng chờ")
           .setDescription(`**[${track.title}](${track.url})**`)
           .setThumbnail(track.thumbnail)
           .setFooter({ text: `Thời lượng: ${track.duration}` });
       }
-
       // ✅ Phát nhạc
-      if (!player.isPlaying) await player.play();
 
       await interaction.editReply({ embeds: [embed] });
     } catch (err) {
