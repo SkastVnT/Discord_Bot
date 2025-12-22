@@ -18,43 +18,48 @@ export default {
     ),
 
   async run({ client, interaction }) {
-    const player = getPlayer(interaction.guildId);
+    try {
+      const player = getPlayer(interaction.guildId);
 
-    if (!player || !player.isPlaying) {
-      return interaction.editReply(
-        "❌ Không có bài hát nào đang phát để lặp lại!"
-      );
+      if (!player || !player.isPlaying) {
+        return interaction.editReply(
+          "❌ Không có bài hát nào đang phát để lặp lại!"
+        );
+      }
+
+      const mode = interaction.options.getString("mode");
+      let repeatMode;
+
+      switch (mode) {
+        case "single":
+          repeatMode = "track";
+          break;
+        case "playlist":
+          repeatMode = "queue";
+          break;
+        case "off":
+        default:
+          repeatMode = "off";
+          break;
+      }
+
+      player.loop(repeatMode);
+
+      const msg =
+        repeatMode === "track"
+          ? "🎵 Lặp lại bài hát hiện tại"
+          : repeatMode === "queue"
+          ? "🎶 Lặp lại toàn bộ playlist"
+          : "🛑 Đã tắt chế độ lặp";
+
+      const embed = new EmbedBuilder()
+        .setColor("Random")
+        .setDescription(`✅ ${msg}`);
+
+      await interaction.editReply({ embeds: [embed] });
+    } catch (error) {
+      console.error("Lỗi trong lệnh loop:", error);
+      return interaction.editReply("❌ Đã xảy ra lỗi khi thay đổi chế độ lặp!");
     }
-
-    const mode = interaction.options.getString("mode");
-    let repeatMode;
-
-    switch (mode) {
-      case "single":
-        repeatMode = "track";
-        break;
-      case "playlist":
-        repeatMode = "queue";
-        break;
-      case "off":
-      default:
-        repeatMode = "off";
-        break;
-    }
-
-    player.loop(repeatMode);
-
-    const msg =
-      repeatMode === "track"
-        ? "🎵 Lặp lại bài hát hiện tại"
-        : repeatMode === "queue"
-        ? "🎶 Lặp lại toàn bộ playlist"
-        : "🛑 Đã tắt chế độ lặp";
-
-    const embed = new EmbedBuilder()
-      .setColor("Random")
-      .setDescription(`✅ ${msg}`);
-
-    await interaction.editReply({ embeds: [embed] });
   },
 };

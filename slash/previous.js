@@ -1,10 +1,10 @@
-import { SlashCommandBuilder } from "discord.js";
+import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
 
 export default {
   data: new SlashCommandBuilder()
-    .setName("back")
-    .setDescription("⏮️ Quay lại bài hát trước đó"),
+    .setName("previous")
+    .setDescription("⏮️ Quay lại bài hát trước (alias của /back)"),
 
   async run({ client, interaction }) {
     try {
@@ -22,9 +22,15 @@ export default {
         );
       }
 
-      await interaction.editReply("⏮️ Đang phát lại bài hát trước đó!");
+      const track = player.currentTrack;
+      const embed = new EmbedBuilder()
+        .setColor("Blue")
+        .setDescription(`⏮️ Quay lại: **${track.title}**`)
+        .setThumbnail(track.thumbnail);
+
+      await interaction.editReply({ embeds: [embed] });
     } catch (error) {
-      console.error("Lỗi trong lệnh back:", error);
+      console.error("Lỗi trong lệnh previous:", error);
       return interaction.editReply("❌ Đã xảy ra lỗi khi quay lại bài hát trước!");
     }
   },
