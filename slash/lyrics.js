@@ -1,50 +1,8 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import lyricsFinder from "lyrics-finder";
 import { ViFonttrim } from "../ViFont.js";
-import { getPlayer } from "ziplayer";
-import { lyricsExt } from "@ziplayer/extension";
+import { getManager } from "ziplayer";
 
-/**
- * Trích xuất tiêu đề bài hát từ title và artist
- */
-export function extractSongTitle(title, artist = "") {
-  const normalizedArtist = artist.toLowerCase().trim();
-  const parts = title.split(/[-|[\]()]/).map((s) => s.trim());
-  for (const p of parts) {
-    if (
-      p &&
-      !p.toLowerCase().includes("official") &&
-      !p.toLowerCase().includes("lyrics") &&
-      !p.toLowerCase().includes(normalizedArtist)
-    ) {
-      return p;
-    }
-  }
-  return title;
-}
-
-/**
- * Tự động đồng bộ lyrics (giả lập)
- */
-export async function setSyncedLyrics(queue, message, lyrics) {
-  if (!lyrics) return;
-
-  const track = queue.currentTrack;
-  const embed = new EmbedBuilder()
-    .setColor("Random")
-    .setTitle(`🎶 Lyrics: ${track.title}`)
-    .setDescription(ViFonttrim(lyrics, 4000));
-
-  try {
-    await message.edit({ embeds: [embed] });
-  } catch (e) {
-    console.warn("Không thể cập nhật lyrics:", e.message);
-  }
-}
-
-/**
- * Slash command /lyrics
- */
 export default {
   data: new SlashCommandBuilder()
     .setName("lyrics")
@@ -57,34 +15,47 @@ export default {
     ),
 
   async run({ client, interaction }) {
-    const lyricsExt = new lyricsExt();
-    const player = getPlayer(interaction.guildId);
+    const manager = getManager();
+    const player = manager.players.get(interaction.guildId);
+
     const songName =
       interaction.options.getString("name") ||
       player?.currentTrack?.title ||
       null;
 
-    if (!songName)
-      return interaction.editReply(
+    if (!songName) {
+      return interaction.channel.send(
         "❌ Không tìm thấy bài hát đang phát hoặc tên không hợp lệ."
       );
+    }
 
-    await interaction.editReply("🔍 Đang tìm lời bài hát...");
+    const loadingMsg = await interaction.channel.send("🔍 Đang tìm lời bài hát...");
 
     try {
-      const lyrics =
-        (await lyricsExt.fetch(songName)) ||
-        (await lyricsFinder(songName)) ||
-        "Không tìm thấy lời bài hát.";
+      let lyricsText = null;
+
+      const lyricsExtension = player?.extensions?.get?.("lyricsExt");
+      if (lyricsExtension && typeof lyricsExtension.fetch === "function") {
+        lyricsText = await lyricsExtension.fetch(songName);
+      }
+
+      if (!lyricsText) {
+        lyricsText =
+          (await lyricsFinder(songName)) || "Không tìm thấy lời bài hát.";
+      }
+
       const embed = new EmbedBuilder()
         .setColor("Random")
         .setTitle(`🎵 Lời bài hát: ${songName}`)
-        .setDescription(ViFonttrim(lyrics?.text || lyrics, 4000))
+        .setDescription(ViFonttrim(lyricsText?.text || lyricsText, 4000))
         .setTimestamp();
 
-      await interaction.editReply({ embeds: [embed] });
+      await interaction.channel.send({ embeds: [embed] });
+      await loadingMsg.delete().catch(() => {});
     } catch (error) {
-      await interaction.editReply(`⚠️ Lỗi khi tìm lyrics: ${error.message}`);
+      console.error("🚨 Lỗi khi tìm lyrics:", error);
+      await interaction.channel.send(`⚠️ Lỗi khi tìm lyrics: ${error.message}`);
+      await loadingMsg.delete().catch(() => {});
     }
   },
 };
