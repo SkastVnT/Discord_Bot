@@ -3,6 +3,7 @@ import lyricsFinder from "lyrics-finder";
 import { ViFonttrim } from "../ViFont.js";
 import { getPlayer } from "ziplayer";
 import { lyricsExt as LyricsExt } from "@ziplayer/extension";
+import { findLyricsWithAI } from "../aiService.js";
 
 /**
  * Trích xuất tiêu đề bài hát từ title và artist
@@ -58,7 +59,6 @@ export default {
 
   async run({ client, interaction }) {
     await interaction.deferReply();
-    const lyricsExtInstance = new LyricsExt();
     const player = getPlayer(interaction.guildId);
     const songName =
       interaction.options.getString("name") ||
@@ -70,22 +70,76 @@ export default {
         "❌ Không tìm thấy bài hát đang phát hoặc tên không hợp lệ."
       );
 
-    await interaction.editReply("🔍 Đang tìm lời bài hát...");
+    // Extract song name and artist
+    const track = player?.currentTrack;
+    const artist = track?.author || "";
+    const cleanSongName = extractSongTitle(songName, artist);
+
+    await interaction.editReply(
+      `🔍 Đang tìm lời bài hát cho "${cleanSongName}" - ${artist}...\n🤖 Sử dụng AI để tìm chính xác...`
+    );
 
     try {
-      const lyrics =
-        (await lyricsExtInstance.fetch(songName)) ||
-        (await lyricsFinder(songName)) ||
-        "Không tìm thấy lời bài hát.";
+      let lyrics = null;
+
+      // 1. Try AI-powered search (most accurate)
+      try {
+        lyrics = await findLyricsWithAI(cleanSongName, artist);
+        if (lyrics) {
+          console.log("✅ Found lyrics via AI");
+        }
+      } catch (error) {
+        console.log("⚠️ AI search failed:", error.message);
+      }
+
+      // 2. Fallback to ZiPlayer extension
+      if (!lyrics) {
+        try {
+          const lyricsExtInstance = new LyricsExt();
+          const result = await lyricsExtInstance.fetch(`${cleanSongName} ${artist}`);
+          if (result && result.length > 0) {
+            lyrics = result[0]?.lyrics || result[0]?.plainLyrics;
+            if (lyrics) console.log("✅ Found lyrics via ZiPlayer extension");
+          }
+        } catch (error) {
+          console.log("⚠️ ZiPlayer extension failed:", error.message);
+        }
+      }
+
+      // 3. Fallback to lyrics-finder
+      if (!lyrics) {
+        try {
+          lyrics = await lyricsFinder(cleanSongName, artist);
+          if (lyrics) console.log("✅ Found lyrics via lyrics-finder");
+        } catch (error) {
+          console.log("⚠️ lyrics-finder failed:", error.message);
+        }
+      }
+
+      if (!lyrics || lyrics.length < 50) {
+        return interaction.editReply(
+          `❌ Không tìm thấy lời bài hát cho "${cleanSongName}" của ${artist}.\n💡 Hãy thử tìm kiếm với tên bài hát chính xác hơn.`
+        );
+      }
+
       const embed = new EmbedBuilder()
         .setColor("Random")
-        .setTitle(`🎵 Lời bài hát: ${songName}`)
-        .setDescription(ViFonttrim(lyrics?.text || lyrics, 4000))
+        .setTitle(`🎵 ${cleanSongName}`)
+        .setAuthor({ name: artist || "Unknown Artist" })
+        .setDescription(ViFonttrim(lyrics, 4000))
+        .setFooter({ text: "🤖 Powered by AI + Multi-source search" })
         .setTimestamp();
 
-      await interaction.editReply({ embeds: [embed] });
+      if (track?.thumbnail) {
+        embed.setThumbnail(track.thumbnail);
+      }
+
+      await interaction.editReply({ content: "", embeds: [embed] });
     } catch (error) {
-      await interaction.editReply(`⚠️ Lỗi khi tìm lyrics: ${error.message}`);
+      console.error("❌ Lyrics command error:", error);
+      await interaction.editReply(
+        `⚠️ Lỗi khi tìm lyrics: ${error.message}\n💡 Hãy thử lại sau.`
+      );
     }
   },
 };

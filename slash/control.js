@@ -9,6 +9,7 @@ import { ViFontfetchInteraction, ViFonttrim } from "../ViFont.js";
 import { extractSongTitle, setSyncedLyrics } from "./lyrics.js";
 import { getPlayer } from "ziplayer";
 import { lyricsExt as LyricsExt } from "@ziplayer/extension";
+import { findLyricsWithAI } from "../aiService.js";
 
 export default {
   data: new SlashCommandBuilder()
@@ -26,32 +27,52 @@ export default {
     const track = player.currentTrack;
     const authorName = track.author?.toLowerCase() || "";
     const cleanedTitle = extractSongTitle(track.title, authorName);
-    const lyricsExtInstance = new LyricsExt();
-    // 🔍 Tìm lyrics
-    let results;
+    
+    // 🔍 Tìm lyrics với AI trước
+    let lyricsText = null;
     try {
-      results = await lyricsExtInstance.fetch(`${cleanedTitle} ${authorName}`);
+      lyricsText = await findLyricsWithAI(cleanedTitle, authorName);
+      if (lyricsText) {
+        console.log("✅ Found lyrics via AI for control");
+      }
     } catch (err) {
-      console.log("Lyrics search error:", err);
+      console.log("AI lyrics search error:", err);
     }
 
-    let lyrics =
-      results?.find(
-        (r) =>
-          r?.artistName?.toLowerCase().includes(authorName) ||
-          cleanedTitle.toLowerCase().includes(r?.trackName?.toLowerCase())
-      ) || results?.[0];
-
-    if (!lyrics?.plainLyrics && !lyrics?.syncedLyrics) {
+    // Fallback to ZiPlayer extension
+    let lyrics = null;
+    if (!lyricsText) {
       try {
-        const fallback = await player.lyrics.search(cleanedTitle);
-        lyrics = fallback?.[0];
-      } catch (e) {
-        console.log(e);
+        const lyricsExtInstance = new LyricsExt();
+        const results = await lyricsExtInstance.fetch(`${cleanedTitle} ${authorName}`);
+        lyrics = results?.find(
+          (r) =>
+            r?.artistName?.toLowerCase().includes(authorName) ||
+            cleanedTitle.toLowerCase().includes(r?.trackName?.toLowerCase())
+        ) || results?.[0];
+        
+        if (lyrics?.plainLyrics || lyrics?.syncedLyrics) {
+          lyricsText = lyrics.plainLyrics || lyrics.syncedLyrics;
+        }
+      } catch (err) {
+        console.log("ZiPlayer lyrics search error:", err);
       }
     }
 
-    if (!lyrics?.plainLyrics && !lyrics?.syncedLyrics) {
+    // Final fallback to player.lyrics
+    if (!lyricsText && !lyrics) {
+      try {
+        const fallback = await player.lyrics.search(cleanedTitle);
+        lyrics = fallback?.[0];
+        if (lyrics?.plainLyrics || lyrics?.syncedLyrics) {
+          lyricsText = lyrics.plainLyrics || lyrics.syncedLyrics;
+        }
+      } catch (e) {
+        console.log("Player lyrics search error:", e);
+      }
+    }
+
+    if (!lyricsText) {
       return interaction.editReply("❌ Không tìm thấy lyrics cho bài này!");
     }
 
@@ -61,28 +82,30 @@ export default {
       .setColor("Random")
       .setAuthor({ name: track.author })
       .setThumbnail(track.thumbnail)
-      .setDescription(`🎵 **${track.title}**\n\nĐang tải lyrics...`);
+      .setDescription(`🎵 **${track.title}**\n\n${ViFonttrim(lyricsText, 4000)}`);
 
     const controlMessage = await interaction.editReply({ embeds: [embed] });
 
-    // 🎤 Đồng bộ lyrics (nếu có synced)
-    const synced = queue.syncedLyrics(lyrics);
-    await setSyncedLyrics(queue, controlMessage, synced);
+    // 🎤 Đồng bộ lyrics (nếu có synced từ ZiPlayer)
+    if (lyrics?.syncedLyrics) {
+      const synced = queue.syncedLyrics(lyrics);
+      await setSyncedLyrics(queue, controlMessage, synced || lyricsText);
 
-    synced?.onChange(async (line, time) => {
-      const progress = queue.node.createProgressBar({
-        timecodes: true,
-        length: 18,
+      synced?.onChange(async (line, time) => {
+        const progress = queue.node.createProgressBar({
+          timecodes: true,
+          length: 18,
+        });
+        const timeFmt = new Date(time).toISOString().substr(14, 5);
+        embed.setDescription(
+          `🎵 **${track.title}**\n\n${progress}\n\n🕒 [${timeFmt}]\n**${line}**`
+        );
+        try {
+          await controlMessage.edit({ embeds: [embed] });
+        } catch {}
       });
-      const timeFmt = new Date(time).toISOString().substr(14, 5);
-      embed.setDescription(
-        `🎵 **${track.title}**\n\n${progress}\n\n🕒 [${timeFmt}]\n**${line}**`
-      );
-      try {
-        await controlMessage.edit({ embeds: [embed] });
-      } catch {}
-    });
-    synced?.subscribe();
+      synced?.subscribe();
+    }
 
     // 🎚️ Các nút điều khiển
     const mainControls = new ActionRowBuilder().addComponents(
