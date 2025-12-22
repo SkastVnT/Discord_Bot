@@ -3,7 +3,6 @@ import lyricsFinder from "lyrics-finder";
 import { ViFonttrim } from "../ViFont.js";
 import { getPlayer } from "ziplayer";
 import { lyricsExt as LyricsExt } from "@ziplayer/extension";
-import { findLyricsWithAI } from "../aiService.js";
 
 /**
  * Trích xuất tiêu đề bài hát từ title và artist
@@ -72,62 +71,51 @@ export default {
 
     // Extract song name and artist
     const track = player?.currentTrack;
-    const artist = track?.author || "";
-    const cleanSongName = extractSongTitle(songName, artist);
+    
+    // Clean title thoroughly
+    let cleanSongName = songName
+      .replace(/\s*-?\s*(Official Video|Official Music Video|Lyrics?|Lyric Video|MV|Audio|HD|4K)\s*/gi, '')
+      .replace(/\s*[\[\(].*?[\]\)]\s*/g, '') // Remove brackets
+      .replace(/\s*[|\u2022]\s*/g, '') // Remove | and bullet points
+      .split(/[-–—]/).map(s => s.trim()).filter(Boolean)[0] || songName; // Take first part before dash
+    
+    cleanSongName = cleanSongName.trim();
+    
+    console.log(`🎵 Original: "${songName}"`);
+    console.log(`🎵 Cleaned: "${cleanSongName}"`);
 
     await interaction.editReply(
-      `🔍 Đang tìm lời bài hát cho "${cleanSongName}" - ${artist}...\n🤖 Sử dụng AI để tìm chính xác...`
+      `🔍 Đang tìm lời bài hát cho "${cleanSongName}"...`
     );
 
     try {
       let lyrics = null;
 
-      // 1. Try AI-powered search (most accurate)
+      // Try lyrics-finder with cleaned title
       try {
-        lyrics = await findLyricsWithAI(cleanSongName, artist);
-        if (lyrics) {
-          console.log("✅ Found lyrics via AI");
+        console.log(`🔍 Searching lyrics-finder...`);
+        lyrics = await lyricsFinder(cleanSongName);
+        console.log(`📊 lyrics-finder result: ${lyrics?.length || 0} chars`);
+        if (lyrics && lyrics.length > 50) {
+          console.log("✅ Found lyrics via lyrics-finder");
+        } else {
+          lyrics = null; // Reset if too short
         }
       } catch (error) {
-        console.log("⚠️ AI search failed:", error.message);
-      }
-
-      // 2. Fallback to ZiPlayer extension
-      if (!lyrics) {
-        try {
-          const lyricsExtInstance = new LyricsExt();
-          const result = await lyricsExtInstance.fetch(`${cleanSongName} ${artist}`);
-          if (result && result.length > 0) {
-            lyrics = result[0]?.lyrics || result[0]?.plainLyrics;
-            if (lyrics) console.log("✅ Found lyrics via ZiPlayer extension");
-          }
-        } catch (error) {
-          console.log("⚠️ ZiPlayer extension failed:", error.message);
-        }
-      }
-
-      // 3. Fallback to lyrics-finder
-      if (!lyrics) {
-        try {
-          lyrics = await lyricsFinder(cleanSongName, artist);
-          if (lyrics) console.log("✅ Found lyrics via lyrics-finder");
-        } catch (error) {
-          console.log("⚠️ lyrics-finder failed:", error.message);
-        }
+        console.log("⚠️ lyrics-finder failed:", error.message);
       }
 
       if (!lyrics || lyrics.length < 50) {
         return interaction.editReply(
-          `❌ Không tìm thấy lời bài hát cho "${cleanSongName}" của ${artist}.\n💡 Hãy thử tìm kiếm với tên bài hát chính xác hơn.`
+          `❌ Không tìm thấy lời cho "${cleanSongName}" (có thể do bài hát Việt Nam).\n💡 Dùng \`/ailyrics\` để tìm bằng AI hoặc thử tên tiếng Anh.`
         );
       }
 
       const embed = new EmbedBuilder()
         .setColor("Random")
         .setTitle(`🎵 ${cleanSongName}`)
-        .setAuthor({ name: artist || "Unknown Artist" })
         .setDescription(ViFonttrim(lyrics, 4000))
-        .setFooter({ text: "🤖 Powered by AI + Multi-source search" })
+        .setFooter({ text: "📜 Via lyrics-finder" })
         .setTimestamp();
 
       if (track?.thumbnail) {

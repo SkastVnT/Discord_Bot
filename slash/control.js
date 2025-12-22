@@ -9,7 +9,6 @@ import { ViFontfetchInteraction, ViFonttrim } from "../ViFont.js";
 import { extractSongTitle, setSyncedLyrics } from "./lyrics.js";
 import { getPlayer } from "ziplayer";
 import { lyricsExt as LyricsExt } from "@ziplayer/extension";
-import { findLyricsWithAI } from "../aiService.js";
 
 export default {
   data: new SlashCommandBuilder()
@@ -28,44 +27,41 @@ export default {
     const authorName = track.author?.toLowerCase() || "";
     const cleanedTitle = extractSongTitle(track.title, authorName);
     
-    // 🔍 Tìm lyrics với AI trước
+    // 🔍 Tìm lyrics với ZiPlayer extension trước
     let lyricsText = null;
+    let lyrics = null;
+    
     try {
-      lyricsText = await findLyricsWithAI(cleanedTitle, authorName);
-      if (lyricsText) {
-        console.log("✅ Found lyrics via AI for control");
+      const lyricsExtInstance = new LyricsExt();
+      const results = await lyricsExtInstance.fetch(`${cleanedTitle} ${authorName}`);
+      lyrics = results?.find(
+        (r) =>
+          r?.artistName?.toLowerCase().includes(authorName) ||
+          cleanedTitle.toLowerCase().includes(r?.trackName?.toLowerCase())
+      ) || results?.[0];
+      
+      // Try all possible lyrics fields
+      if (lyrics) {
+        lyricsText = lyrics.plainLyrics || lyrics.syncedLyrics || lyrics.lyrics;
+        if (lyricsText) {
+          console.log("✅ Found lyrics via ZiPlayer extension for control");
+          if (lyrics.syncedLyrics) {
+            console.log("🎵 Using synced lyrics from LyricsExt for control");
+          }
+        }
       }
     } catch (err) {
-      console.log("AI lyrics search error:", err);
+      console.log("ZiPlayer lyrics search error:", err);
     }
 
-    // Fallback to ZiPlayer extension
-    let lyrics = null;
-    if (!lyricsText) {
-      try {
-        const lyricsExtInstance = new LyricsExt();
-        const results = await lyricsExtInstance.fetch(`${cleanedTitle} ${authorName}`);
-        lyrics = results?.find(
-          (r) =>
-            r?.artistName?.toLowerCase().includes(authorName) ||
-            cleanedTitle.toLowerCase().includes(r?.trackName?.toLowerCase())
-        ) || results?.[0];
-        
-        if (lyrics?.plainLyrics || lyrics?.syncedLyrics) {
-          lyricsText = lyrics.plainLyrics || lyrics.syncedLyrics;
-        }
-      } catch (err) {
-        console.log("ZiPlayer lyrics search error:", err);
-      }
-    }
-
-    // Final fallback to player.lyrics
+    // Fallback to player.lyrics
     if (!lyricsText && !lyrics) {
       try {
         const fallback = await player.lyrics.search(cleanedTitle);
         lyrics = fallback?.[0];
         if (lyrics?.plainLyrics || lyrics?.syncedLyrics) {
           lyricsText = lyrics.plainLyrics || lyrics.syncedLyrics;
+          console.log("✅ Found lyrics via player.lyrics");
         }
       } catch (e) {
         console.log("Player lyrics search error:", e);

@@ -1,4 +1,4 @@
-import { genai } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import axios from "axios";
 
 const GEMINI_KEYS = [
@@ -23,9 +23,9 @@ async function callGemini(prompt, systemPrompt = "") {
     const apiKey = GEMINI_KEYS[keyIndex];
     
     try {
-      const client = genai.Client({ apiKey });
+      const ai = new GoogleGenAI({ apiKey });
       
-      const response = await client.models.generateContent({
+      const response = await ai.models.generateContent({
         model: "gemini-2.0-flash-exp",
         contents: prompt,
         config: {
@@ -35,7 +35,7 @@ async function callGemini(prompt, systemPrompt = "") {
       });
       
       currentGeminiIndex = (keyIndex + 1) % GEMINI_KEYS.length;
-      return response.text();
+      return response.text;
     } catch (error) {
       console.log(`❌ Gemini key ${keyIndex + 1} failed:`, error.message);
       if (i === GEMINI_KEYS.length - 1) throw error;
