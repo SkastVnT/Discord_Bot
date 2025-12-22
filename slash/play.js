@@ -81,70 +81,76 @@ export default {
 
       if (!player.connection) await player.connect(voiceChannel);
 
-      let query;
-      let searchEngine;
+      let query = interaction.options.getString("url") || interaction.options.getString("searchterms");
 
-      switch (sub) {
-        case "song":
-          query = interaction.options.getString("url");
-          searchEngine = "youtube_video";
-          break;
-        case "playlist":
-          query = interaction.options.getString("url");
-          searchEngine = "youtube_playlist";
-          break;
-        case "search":
-          query = interaction.options.getString("searchterms");
-          searchEngine = "youtube_search";
-          break;
-        case "soundcloud":
-          query = interaction.options.getString("url");
-          searchEngine = "soundcloud_search";
-          break;
-        case "spotify":
-          query = interaction.options.getString("url");
-          searchEngine = "spotify_search";
-          break;
-        case "spotifyalbum":
-          query = interaction.options.getString("url");
-          searchEngine = "spotify_album";
-          break;
-        default:
-          query = interaction.options.getString("url");
-          searchEngine = "auto";
-      }
+      console.log(`🔍 Query: ${query}, Subcommand: ${sub}`);
 
+      // Search và lấy kết quả
       const result = await player.search(query, interaction.user);
 
-      if (!result || !result.tracks.length)
+      if (!result || !result.tracks.length) {
         return interaction.editReply("❌ Không tìm thấy kết quả nào!");
+      }
+
+      console.log(`📊 Result type: ${result.playlist ? 'Playlist' : 'Single'}`);
+      if (result.playlist) {
+        console.log(`📀 Playlist: "${result.playlist.title}" with ${result.tracks.length} tracks`);
+      } else {
+        console.log(`🎵 Single track: "${result.tracks[0].title}"`);
+      }
 
       const embed = new EmbedBuilder().setColor(0x00ff99);
 
-      const fallstatus = await player.play(result.tracks[0]);
-      if (!fallstatus) return interaction.editReply("❌ Không thể phát nhạc!");
+      // Xử lý playlist hoặc single track
+      if (result.playlist && result.tracks.length > 1) {
+        // Playlist: phát bài đầu và add phần còn lại vào queue
+        const firstTrack = result.tracks[0];
+        
+        // Nếu đang không phát gì, phát bài đầu tiên
+        if (!player.isPlaying) {
+          await player.play(firstTrack);
+        } else {
+          // Nếu đang phát, add vào queue
+          player.queue.add(firstTrack);
+        }
 
-      if (result.playlist) {
-        // ✅ sửa phần này: hiển thị số lượng bài bằng result.tracks.length
-        player.queue.addMultiple(result.tracks.slice(1));
+        // Add các bài còn lại vào queue
+        if (result.tracks.length > 1) {
+          player.queue.addMultiple(result.tracks.slice(1));
+        }
+
         embed
           .setTitle("📀 Playlist đã thêm vào hàng chờ")
-          .setDescription(`**[${result.playlist.title}](${result.playlist.url})**`)
-          .setThumbnail(result.playlist.thumbnail)
-          .setFooter({ text: `${result.tracks.length} bài hát trong playlist` });
+          .setDescription(`**[${result.playlist.title || "Mix Playlist"}](${result.playlist.url || query})**`)
+          .setThumbnail(result.playlist.thumbnail || firstTrack.thumbnail)
+          .setFooter({ 
+            text: `${result.tracks.length} bài hát | Yêu cầu bởi ${interaction.user.tag}` 
+          });
+
       } else {
-        const track = result.tracks?.[0];
+        // Single track
+        const track = result.tracks[0];
+        
+        if (!player.isPlaying) {
+          await player.play(track);
+        } else {
+          player.queue.add(track);
+        }
+
         embed
           .setTitle("🎶 Đã thêm vào hàng chờ")
           .setDescription(`**[${track.title}](${track.url})**`)
           .setThumbnail(track.thumbnail)
-          .setFooter({ text: `Thời lượng: ${track.duration}` });
+          .setFooter({ 
+            text: `⏱️ ${track.duration} | 👤 ${track.author}` 
+          });
       }
 
       await interaction.editReply({ embeds: [embed] });
+
     } catch (err) {
       console.error("🚨 Lỗi phát nhạc:", err);
-      await interaction.editReply("❌ Lỗi khi phát nhạc. Vui lòng thử lại.");
+      await interaction.editReply(`❌ Lỗi: ${err.message}`);
     }
   },
 };

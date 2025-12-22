@@ -7,10 +7,15 @@ export default {
     .setDescription("⛔ Dừng bot và xóa danh sách chờ"),
 
   async run({ client, interaction }) {
-    const player = getPlayer(interaction.guildId);
-    if (!player) return interaction.editReply("❌ Không có hàng chờ để thoát.");
+    try {
+      const player = getPlayer(interaction.guildId);
+      if (!player) return interaction.editReply("❌ Không có hàng chờ để thoát.");
 
-    player.destroy();
-    await interaction.editReply("👋 Tạm biệt! ❤️");
+      player.destroy();
+      await interaction.editReply("👋 Tạm biệt! ❤️");
+    } catch (error) {
+      console.error("Lỗi trong lệnh quit:", error);
+      return interaction.editReply("❌ Đã xảy ra lỗi khi thoát!");
+    }
   },
 };

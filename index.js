@@ -80,18 +80,48 @@ const __dirname = path.dirname(__filename);
 
 let commands = [];
 const slashFolder = path.join(__dirname, "slash");
-const slashFiles = fs.readdirSync(slashFolder).filter((f) => f.endsWith(".js"));
 
-for (const file of slashFiles) {
+// Hàm load một command từ file
+async function loadCommand(file) {
   try {
     const filePath = path.join(slashFolder, file);
-    const { default: slashcmd } = await import(`file://${filePath}`);
+    const fileURL = `file://${filePath}?update=${Date.now()}`;
+    const { default: slashcmd } = await import(fileURL);
     client.slashcommands.set(slashcmd.data.name, slashcmd);
-    commands.push(slashcmd.data.toJSON());
+    console.log(`✅ Đã load: ${slashcmd.data.name}`);
+    return slashcmd;
   } catch (error) {
-    console.error("❌ Lỗi khi load slash command:", error);
+    console.error(`❌ Lỗi khi load ${file}:`, error.message);
+    return null;
   }
 }
+
+// Load tất cả commands lần đầu
+const slashFiles = fs.readdirSync(slashFolder).filter((f) => f.endsWith(".js"));
+for (const file of slashFiles) {
+  const slashcmd = await loadCommand(file);
+  if (slashcmd) commands.push(slashcmd.data.toJSON());
+}
+
+// 🔥 HOT RELOAD - Theo dõi thay đổi trong folder slash
+console.log("🔥 Hot reload đã được bật! Thay đổi code sẽ tự động cập nhật.");
+fs.watch(slashFolder, { recursive: false }, async (eventType, filename) => {
+  if (!filename || !filename.endsWith(".js")) return;
+  
+  if (eventType === "change") {
+    console.log(`🔄 Phát hiện thay đổi: ${filename} - Đang reload...`);
+    
+    // Xóa cache của module cũ
+    const filePath = path.join(slashFolder, filename);
+    delete require.cache[require.resolve(filePath)];
+    
+    // Load lại command
+    const slashcmd = await loadCommand(filename);
+    if (slashcmd) {
+      console.log(`✨ Hot reload thành công: ${slashcmd.data.name}`);
+    }
+  }
+});
 
 // ===========================================
 // 🧩 Register Commands
