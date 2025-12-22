@@ -20,6 +20,7 @@ import {
   YouTubePlugin,
   SoundCloudPlugin,
   SpotifyPlugin,
+  YTSRPlugin,
 } from "@ziplayer/plugin";
 
 import { lyricsExt } from "@ziplayer/extension";
@@ -69,7 +70,7 @@ client.slashcommands = new Collection();
 // ===========================================
 // 🎧 PLAYER CONFIG
 const playerManager = new PlayerManager({
-  plugins: [new YouTubePlugin(), new SoundCloudPlugin(), new SpotifyPlugin()],
+  plugins: [new YTSRPlugin(),new YouTubePlugin(), new SoundCloudPlugin(), new SpotifyPlugin()],
   extensions: [new lyricsExt()],
 });
 
@@ -192,6 +193,8 @@ playerManager.on("playerDestroy", (player) => {
   console.log("🚪 Bot đã rời voice channel");
   player.userdata.channel?.send("👋 Đã rời voice channel!");
 });
+
+playerManager.on("debug", console.log);
 
 // ===========================================
 playerManager.on("debug",console.log);
