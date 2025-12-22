@@ -2,7 +2,7 @@ import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import lyricsFinder from "lyrics-finder";
 import { ViFonttrim } from "../ViFont.js";
 import { getPlayer } from "ziplayer";
-import { lyricsExt } from "@ziplayer/extension";
+import { lyricsExt as LyricsExt } from "@ziplayer/extension";
 
 /**
  * Trích xuất tiêu đề bài hát từ title và artist
@@ -57,7 +57,8 @@ export default {
     ),
 
   async run({ client, interaction }) {
-    const lyricsExt = new lyricsExt();
+    await interaction.deferReply();
+    const lyricsExtInstance = new LyricsExt();
     const player = getPlayer(interaction.guildId);
     const songName =
       interaction.options.getString("name") ||
@@ -73,7 +74,7 @@ export default {
 
     try {
       const lyrics =
-        (await lyricsExt.fetch(songName)) ||
+        (await lyricsExtInstance.fetch(songName)) ||
         (await lyricsFinder(songName)) ||
         "Không tìm thấy lời bài hát.";
       const embed = new EmbedBuilder()

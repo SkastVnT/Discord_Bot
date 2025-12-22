@@ -8,7 +8,7 @@ import {
 import { ViFontfetchInteraction, ViFonttrim } from "../ViFont.js";
 import { extractSongTitle, setSyncedLyrics } from "./lyrics.js";
 import { getPlayer } from "ziplayer";
-import { lyricsExt } from "@ziplayer/extension";
+import { lyricsExt as LyricsExt } from "@ziplayer/extension";
 
 export default {
   data: new SlashCommandBuilder()
@@ -26,11 +26,11 @@ export default {
     const track = player.currentTrack;
     const authorName = track.author?.toLowerCase() || "";
     const cleanedTitle = extractSongTitle(track.title, authorName);
-    const lyricsExt = new lyricsExt();
+    const lyricsExtInstance = new LyricsExt();
     // 🔍 Tìm lyrics
     let results;
     try {
-      results = await lyricsExt.fetch(`${cleanedTitle} ${authorName}`);
+      results = await lyricsExtInstance.fetch(`${cleanedTitle} ${authorName}`);
     } catch (err) {
       console.log("Lyrics search error:", err);
     }
