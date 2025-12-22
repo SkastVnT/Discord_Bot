@@ -7,6 +7,7 @@ export default {
     .setDescription("📀 Hiển thị thông tin bài hát đang phát"),
 
   async run({ client, interaction }) {
+    await interaction.deferReply();
     try {
       const player = getPlayer(interaction.guildId);
 
@@ -32,7 +33,7 @@ export default {
             value: track.author || "Không rõ",
             inline: true,
           },
-          { name: "⏱️ Thời lượng", value: track.duration, inline: true },
+          { name: "⏱️ Thời lượng", value: String(track.duration || "N/A"), inline: true },
           {
             name: "📡 Nguồn",
             value: track.source || "Không xác định",
