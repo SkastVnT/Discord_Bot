@@ -3,7 +3,7 @@ import { existsSync, readdirSync, statSync } from "fs";
 import { join, extname, basename } from "path";
 
 // Đường dẫn folder nhạc local của bạn
-const MUSIC_FOLDER = "C:\\Users\\SkastVnT\\Downloads\\Music";
+const MUSIC_FOLDER = "C:\\Users\\SkastVnT\\Music\\iTunes\\iTunes Media\\Music\\SongVocals";
 
 export default {
   data: new SlashCommandBuilder()

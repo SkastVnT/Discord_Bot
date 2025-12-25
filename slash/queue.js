@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
-import { getManager } from "ziplayer";
+import { getManager, getPlayer } from "ziplayer";
 
 export default {
   data: new SlashCommandBuilder()

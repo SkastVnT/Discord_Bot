@@ -1,11 +1,11 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
-import { createAudioResource, createAudioPlayer, AudioPlayerStatus, NoSubscriberBehavior } from "@discordjs/voice";
+import { createAudioResource, createAudioPlayer, StreamType, NoSubscriberBehavior, AudioPlayerStatus } from "@discordjs/voice";
 import { getPlayer, getManager } from "ziplayer";
 import { existsSync, readdirSync, statSync } from "fs";
 import { join, extname, basename } from "path";
 
 // Đường dẫn folder nhạc local của bạn
-const MUSIC_FOLDER = "C:\\Users\\SkastVnT\\Downloads\\Music";
+const MUSIC_FOLDER = "C:\\Users\\SkastVnT\\Music\\iTunes\\iTunes Media\\Music\\SongVocals";
 
 export default {
   data: new SlashCommandBuilder()
@@ -99,19 +99,42 @@ export default {
         await player.connect(voiceChannel);
       }
 
-      // Tạo audio resource từ file local
-      const resource = createAudioResource(filePath, {
-        inlineVolume: true,
-      });
-
-      // Set volume
-      resource.volume?.setVolume(player.volume / 100);
-
-      // Phát nhạc
-      player.node.play(resource);
-
       const fileName = basename(filePath);
       const fileSize = (statSync(filePath).size / (1024 * 1024)).toFixed(2);
+
+      // Tạo audio resource trực tiếp từ file local
+      const resource = createAudioResource(filePath, {
+        inlineVolume: true,
+        inputType: StreamType.Arbitrary,
+      });
+
+      // Set volume theo player hiện tại
+      if (resource.volume) {
+        resource.volume.setVolume((player.volume || 100) / 100);
+      }
+
+      // Lấy hoặc tạo AudioPlayer riêng cho local files
+      let audioPlayer;
+      if (player.node) {
+        // Nếu đã có node (đang phát nhạc từ ziplayer), dùng luôn
+        audioPlayer = player.node;
+      } else {
+        // Nếu chưa có, tạo AudioPlayer mới
+        audioPlayer = createAudioPlayer({
+          behaviors: {
+            noSubscriber: NoSubscriberBehavior.Play,
+          },
+        });
+        
+        // Subscribe AudioPlayer vào connection
+        player.connection.subscribe(audioPlayer);
+        
+        // Lưu lại để dùng sau
+        player.node = audioPlayer;
+      }
+
+      // Phát file local
+      audioPlayer.play(resource);
 
       const embed = new EmbedBuilder()
         .setColor(0x00ff99)
@@ -126,11 +149,6 @@ export default {
         .setTimestamp();
 
       await interaction.editReply({ embeds: [embed] });
-
-      // Thêm event listener khi phát xong
-      player.node.on(AudioPlayerStatus.Idle, () => {
-        console.log("✅ Local file finished playing");
-      });
 
     } catch (error) {
       console.error("🚨 Lỗi phát nhạc local:", error);

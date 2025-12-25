@@ -16,6 +16,8 @@ export default {
 
   async run({ client, interaction }) {
     try {
+      await interaction.deferReply();
+      
       const player = getPlayer(interaction.guildId);
 
       if (!player || !player.isPlaying) {
