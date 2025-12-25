@@ -9,6 +9,11 @@ import { ViFontfetchInteraction, ViFonttrim } from "../ViFont.js";
 import { extractSongTitle, setSyncedLyrics } from "./lyrics.js";
 import { getPlayer } from "ziplayer";
 import { lyricsExt as LyricsExt } from "@ziplayer/extension";
+<<<<<<< HEAD
+=======
+import { ViFonttrim } from "../ViFont.js";
+import { getManager } from "ziplayer";
+>>>>>>> d2514a2b123e91aa12dea2b2bc86840da23e78cf
 
 export default {
   data: new SlashCommandBuilder()
@@ -72,6 +77,20 @@ export default {
     }
 
     // 🖼️ Embed gốc hiển thị
+<<<<<<< HEAD
+=======
+    const lyricsExtension = player?.extensions?.get?.("lyricsExt");
+    let lyrics = null;
+
+    if (lyricsExtension && typeof lyricsExtension.fetch === "function") {
+      try {
+        lyrics = await lyricsExtension.fetch(track.title);
+      } catch (err) {
+        console.log("Lyrics search error:", err);
+      }
+    }
+
+>>>>>>> d2514a2b123e91aa12dea2b2bc86840da23e78cf
     const embed = new EmbedBuilder()
       .setTitle("🎶 Đang phát")
       .setColor("Random")
@@ -101,6 +120,15 @@ export default {
       });
       synced?.subscribe();
     }
+<<<<<<< HEAD
+=======
+      .setDescription(
+        `🎵 **${track.title}**\n\n${ViFonttrim(
+          lyrics?.text || "Không có lời bài hát",
+          1500
+        )}`
+      );
+>>>>>>> d2514a2b123e91aa12dea2b2bc86840da23e78cf
 
     const controlMessage = await interaction.channel.send({ embeds: [embed] });
 
