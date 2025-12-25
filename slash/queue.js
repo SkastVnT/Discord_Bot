@@ -14,6 +14,8 @@ export default {
 
   async run({ client, interaction }) {
     try {
+      await interaction.deferReply();
+      
       const player = getPlayer(interaction.guildId);
       if (!player || !player.isPlaying) {
         return interaction.editReply(
@@ -28,7 +30,11 @@ export default {
         );
       }
 
-      const tracks = player.queue.tracks.toArray();
+      // ZiPlayer tracks là array hoặc có thể là Map/Set, xử lý linh hoạt
+      const tracks = Array.isArray(player.queue.tracks) 
+        ? player.queue.tracks 
+        : player.queue.tracks.toArray?.() || Array.from(player.queue.tracks || []);
+      
       const totalPages = Math.ceil(tracks.length / 10) || 1;
       const page = (interaction.options.getNumber("page") || 1) - 1;
 

@@ -5,8 +5,10 @@ import {
   ButtonStyle,
   EmbedBuilder,
 } from "discord.js";
-import { ViFonttrim } from "../ViFont.js";
-import { getManager } from "ziplayer";
+import { ViFontfetchInteraction, ViFonttrim } from "../ViFont.js";
+import { extractSongTitle, setSyncedLyrics } from "./lyrics.js";
+import { getPlayer } from "ziplayer";
+import { lyricsExt as LyricsExt } from "@ziplayer/extension";
 
 export default {
   data: new SlashCommandBuilder()
@@ -14,36 +16,91 @@ export default {
     .setDescription("🎛️ Điều khiển trình phát nhạc như một ứng dụng mini"),
 
   async run({ client, interaction }) {
-    const manager = getManager();
-    const player = manager.players.get(interaction.guildId);
+    const player = getPlayer(interaction.guildId);
 
     if (!player || !player.playing) {
       return interaction.channel.send("❌ Không có bài hát nào đang phát!");
     }
 
     const track = player.currentTrack;
-    const lyricsExtension = player?.extensions?.get?.("lyricsExt");
+    const authorName = track.author?.toLowerCase() || "";
+    const cleanedTitle = extractSongTitle(track.title, authorName);
+    
+    // 🔍 Tìm lyrics với ZiPlayer extension trước
+    let lyricsText = null;
     let lyrics = null;
+    
+    try {
+      const lyricsExtInstance = new LyricsExt();
+      const results = await lyricsExtInstance.fetch(`${cleanedTitle} ${authorName}`);
+      lyrics = results?.find(
+        (r) =>
+          r?.artistName?.toLowerCase().includes(authorName) ||
+          cleanedTitle.toLowerCase().includes(r?.trackName?.toLowerCase())
+      ) || results?.[0];
+      
+      // Try all possible lyrics fields
+      if (lyrics) {
+        lyricsText = lyrics.plainLyrics || lyrics.syncedLyrics || lyrics.lyrics;
+        if (lyricsText) {
+          console.log("✅ Found lyrics via ZiPlayer extension for control");
+          if (lyrics.syncedLyrics) {
+            console.log("🎵 Using synced lyrics from LyricsExt for control");
+          }
+        }
+      }
+    } catch (err) {
+      console.log("ZiPlayer lyrics search error:", err);
+    }
 
-    if (lyricsExtension && typeof lyricsExtension.fetch === "function") {
+    // Fallback to player.lyrics
+    if (!lyricsText && !lyrics) {
       try {
-        lyrics = await lyricsExtension.fetch(track.title);
-      } catch (err) {
-        console.log("Lyrics search error:", err);
+        const fallback = await player.lyrics.search(cleanedTitle);
+        lyrics = fallback?.[0];
+        if (lyrics?.plainLyrics || lyrics?.syncedLyrics) {
+          lyricsText = lyrics.plainLyrics || lyrics.syncedLyrics;
+          console.log("✅ Found lyrics via player.lyrics");
+        }
+      } catch (e) {
+        console.log("Player lyrics search error:", e);
       }
     }
 
+    if (!lyricsText) {
+      return interaction.editReply("❌ Không tìm thấy lyrics cho bài này!");
+    }
+
+    // 🖼️ Embed gốc hiển thị
     const embed = new EmbedBuilder()
       .setTitle("🎶 Đang phát")
       .setColor("Random")
       .setAuthor({ name: track.author || "Không rõ" })
       .setThumbnail(track.thumbnail)
-      .setDescription(
-        `🎵 **${track.title}**\n\n${ViFonttrim(
-          lyrics?.text || "Không có lời bài hát",
-          1500
-        )}`
-      );
+      .setDescription(`🎵 **${track.title}**\n\n${ViFonttrim(lyricsText, 4000)}`);
+
+    const controlMessage = await interaction.editReply({ embeds: [embed] });
+
+    // 🎤 Đồng bộ lyrics (nếu có synced từ ZiPlayer)
+    if (lyrics?.syncedLyrics) {
+      const synced = queue.syncedLyrics(lyrics);
+      await setSyncedLyrics(queue, controlMessage, synced || lyricsText);
+
+      synced?.onChange(async (line, time) => {
+        const progress = queue.node.createProgressBar({
+          timecodes: true,
+          length: 18,
+        });
+        const timeFmt = new Date(time).toISOString().substr(14, 5);
+        embed.setDescription(
+          `🎵 **${track.title}**\n\n${progress}\n\n🕒 [${timeFmt}]\n**${line}**`
+        );
+        try {
+          await controlMessage.edit({ embeds: [embed] });
+        } catch {}
+      });
+      synced?.subscribe();
+    }
 
     const controlMessage = await interaction.channel.send({ embeds: [embed] });
 

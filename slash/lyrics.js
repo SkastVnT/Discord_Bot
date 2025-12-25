@@ -1,7 +1,8 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import lyricsFinder from "lyrics-finder";
 import { ViFonttrim } from "../ViFont.js";
-import { getManager } from "ziplayer";
+import { getPlayer } from "ziplayer";
+import { lyricsExt as LyricsExt } from "@ziplayer/extension";
 
 export default {
   data: new SlashCommandBuilder()
@@ -15,47 +16,78 @@ export default {
     ),
 
   async run({ client, interaction }) {
-    const manager = getManager();
-    const player = manager.players.get(interaction.guildId);
-
+    await interaction.deferReply();
+    const player = getPlayer(interaction.guildId);
     const songName =
       interaction.options.getString("name") ||
       player?.currentTrack?.title ||
       null;
 
     if (!songName) {
-      return interaction.channel.send(
+      return interaction.editReply(
         "❌ Không tìm thấy bài hát đang phát hoặc tên không hợp lệ."
       );
     }
 
-    const loadingMsg = await interaction.channel.send("🔍 Đang tìm lời bài hát...");
+    // Extract song name and artist
+    const track = player?.currentTrack;
+    
+    // Clean title thoroughly
+    let cleanSongName = songName
+      .replace(/\s*-?\s*(Official Video|Official Music Video|Lyrics?|Lyric Video|MV|Audio|HD|4K)\s*/gi, '')
+      .replace(/\s*[\[\(].*?[\]\)]\s*/g, '') // Remove brackets
+      .replace(/\s*[|\u2022]\s*/g, '') // Remove | and bullet points
+      .split(/[-–—]/).map(s => s.trim()).filter(Boolean)[0] || songName; // Take first part before dash
+    
+    cleanSongName = cleanSongName.trim();
+    
+    console.log(`🎵 Original: "${songName}"`);
+    console.log(`🎵 Cleaned: "${cleanSongName}"`);
+
+    await interaction.editReply(
+      `🔍 Đang tìm lời bài hát cho "${cleanSongName}"...`
+    );
 
     try {
-      let lyricsText = null;
+      let lyrics = null;
 
-      const lyricsExtension = player?.extensions?.get?.("lyricsExt");
-      if (lyricsExtension && typeof lyricsExtension.fetch === "function") {
-        lyricsText = await lyricsExtension.fetch(songName);
+      // Try lyrics-finder with cleaned title
+      try {
+        console.log(`🔍 Searching lyrics-finder...`);
+        lyrics = await lyricsFinder(cleanSongName);
+        console.log(`📊 lyrics-finder result: ${lyrics?.length || 0} chars`);
+        if (lyrics && lyrics.length > 50) {
+          console.log("✅ Found lyrics via lyrics-finder");
+        } else {
+          lyrics = null; // Reset if too short
+        }
+      } catch (error) {
+        console.log("⚠️ lyrics-finder failed:", error.message);
       }
 
-      if (!lyricsText) {
-        lyricsText =
-          (await lyricsFinder(songName)) || "Không tìm thấy lời bài hát.";
+      if (!lyrics || lyrics.length < 50) {
+        return interaction.editReply(
+          `❌ Không tìm thấy lời cho "${cleanSongName}" (có thể do bài hát Việt Nam).\n💡 Dùng \`/ailyrics\` để tìm bằng AI hoặc thử tên tiếng Anh.`
+        );
       }
 
       const embed = new EmbedBuilder()
         .setColor("Random")
-        .setTitle(`🎵 Lời bài hát: ${songName}`)
-        .setDescription(ViFonttrim(lyricsText?.text || lyricsText, 4000))
+        .setTitle(`🎵 ${cleanSongName}`)
+        .setDescription(ViFonttrim(lyrics, 4000))
+        .setFooter({ text: "📜 Via lyrics-finder" })
         .setTimestamp();
 
-      await interaction.channel.send({ embeds: [embed] });
-      await loadingMsg.delete().catch(() => {});
+      if (track?.thumbnail) {
+        embed.setThumbnail(track.thumbnail);
+      }
+
+      await interaction.editReply({ content: "", embeds: [embed] });
     } catch (error) {
-      console.error("🚨 Lỗi khi tìm lyrics:", error);
-      await interaction.channel.send(`⚠️ Lỗi khi tìm lyrics: ${error.message}`);
-      await loadingMsg.delete().catch(() => {});
+      console.error("❌ Lyrics command error:", error);
+      await interaction.editReply(
+        `⚠️ Lỗi khi tìm lyrics: ${error.message}\n💡 Hãy thử lại sau.`
+      );
     }
   },
 };

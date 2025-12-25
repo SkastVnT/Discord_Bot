@@ -137,19 +137,6 @@ export default {
           player.queue.add(track);
         }
 
-      const fallstatus = await player.play(result.tracks[0]);
-      if (!fallstatus) return interaction.editReply("❌ Không thể phát nhạc!");
-
-      if (result.playlist) {
-        // ✅ sửa phần này: hiển thị số lượng bài bằng result.tracks.length
-        player.queue.addMultiple(result.tracks.slice(1));
-        embed
-          .setTitle("📀 Playlist đã thêm vào hàng chờ")
-          .setDescription(`**[${result.playlist.title}](${result.playlist.url})**`)
-          .setThumbnail(result.playlist.thumbnail)
-          .setFooter({ text: `${result.tracks.length} bài hát trong playlist` });
-      } else {
-        const track = result.tracks?.[0];
         embed
           .setTitle("🎶 Đã thêm vào hàng chờ")
           .setDescription(`**[${track.title}](${track.url})**`)
