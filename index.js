@@ -24,6 +24,7 @@ import {
 } from "@ziplayer/plugin";
 
 import { lyricsExt } from "@ziplayer/extension";
+
 // ===========================================
 // 🧩 Dependency Check
 function check(pkg) {
@@ -50,10 +51,63 @@ console.log("--------------------------------------------------");
 if (ffmpeg) process.env.FFMPEG_PATH = ffmpeg;
 
 // ===========================================
+// 🎤 Live Lyrics Hook - Must be set BEFORE PlayerManager
+const originalConsoleLog = console.log;
+console.log = (...args) => {
+  originalConsoleLog(...args);
+  
+  // Check for lyricsExt emit line
+  const msg = args[0];
+  if (typeof msg === 'string' && msg.includes('[lyricsExt] emit line')) {
+    // Parse: [lyricsExt] emit line idx=0 t=1000 "lyrics text here"
+    const match = msg.match(/\[lyricsExt\] emit line idx=\d+ t=\d+ "(.+)"/);
+    if (match && match[1]) {
+      const lyricLine = match[1];
+      originalConsoleLog(`📝 Caught lyric: ${lyricLine}`);
+      // Update all active sessions using global
+      if (global.liveLyricsSessions) {
+        for (const [guildId, session] of global.liveLyricsSessions) {
+          if (session && session.active) {
+            // Inline update logic
+            session.lines = session.lines || [];
+            session.lines.push(lyricLine);
+            if (session.lines.length > 4) session.lines.shift();
+            
+            let display = "";
+            for (let i = 0; i < session.lines.length - 1; i++) {
+              display += `┃ *${session.lines[i]}*\n`;
+            }
+            if (session.lines.length > 0) {
+              display += `┃ **➤ ${session.lines[session.lines.length - 1]}**`;
+            }
+            
+            // Update lyrics field (index 4) instead of description
+            try {
+              session.embed.spliceFields(4, 1, { name: "🎤 Lyrics", value: display || "⏳ Đang chờ lyrics..." });
+              session.message.edit({ embeds: [session.embed] }).catch(() => {});
+              originalConsoleLog(`📤 Updated lyrics for guild: ${guildId}`);
+            } catch (e) {
+              originalConsoleLog(`❌ Error updating lyrics: ${e.message}`);
+            }
+          }
+        }
+      }
+    }
+  }
+};
+
+// ===========================================
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = "1046784301615812649";
-const GUILD_ID = "912280384471982091";
+const GUILD_IDS = [
+  "912280384471982091",
+  "815576037236277268",
+  "747365069129777172"
+];
 const LOAD_SLASH = process.argv[2] === "load";
+
+// Debug token
+console.log("Token loaded:", TOKEN ? `${TOKEN.substring(0, 20)}...` : "UNDEFINED");
 
 const client = new Client({
   intents: [
@@ -70,7 +124,7 @@ client.slashcommands = new Collection();
 // ===========================================
 // 🎧 PLAYER CONFIG
 const playerManager = new PlayerManager({
-  plugins: [new YTSRPlugin(),new YouTubePlugin(), new SoundCloudPlugin(), new SpotifyPlugin()],
+  plugins: [new YTSRPlugin(), new YouTubePlugin(), new SpotifyPlugin()], // Removed SoundCloudPlugin due to client_id issues
   extensions: [new lyricsExt()],
 });
 
@@ -129,14 +183,17 @@ fs.watch(slashFolder, { recursive: false }, async (eventType, filename) => {
 async function registerCommands() {
   const rest = new REST({ version: "9" }).setToken(TOKEN);
   try {
-    console.log(`🔄 Reloading ${commands.length} slash command(s)...`);
-    // await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), {
-    //   body: commands,
-    // });
-    await rest.put(Routes.applicationCommands(client.user.id ?? CLIENT_ID), {
-      body: commands,
-    });
-    console.log("✅ Reload slash commands thành công!");
+    console.log(`🔄 Reloading ${commands.length} slash command(s) cho ${GUILD_IDS.length} guild(s)...`);
+    
+    // Load commands cho từng guild
+    for (const guildId of GUILD_IDS) {
+      await rest.put(Routes.applicationGuildCommands(CLIENT_ID, guildId), {
+        body: commands,
+      });
+      console.log(`✅ Đã load commands cho guild: ${guildId}`);
+    }
+    
+    console.log("✅ Reload slash commands thành công cho tất cả guilds!");
     process.exit(0);
   } catch (error) {
     console.error("❌ Lỗi khi load slash commands:", error);
@@ -174,28 +231,118 @@ client.on(Events.InteractionCreate, async (interaction) => {
 playerManager.on("audioTrackAdd", (player, track) => {
   console.log(`🎵 Đã thêm: ${track.title} vào queue`);
 });
-playerManager.on("trackStart", (player, track) => {
+
+playerManager.on("trackStart", async (player, track) => {
   console.log(`▶️ Bắt đầu phát: ${track.title}`);
-  player.userdata.channel?.send(`🎶 Đang phát: **${track.title}**`);
+  
+  // Cập nhật Live Info+Lyrics embed khi chuyển bài
+  const guildId = player.guildId;
+  const channel = player.userdata.channel;
+  
+  if (global.liveLyricsSessions && global.liveLyricsSessions.has(guildId)) {
+    const session = global.liveLyricsSessions.get(guildId);
+    if (session && session.active && channel) {
+      // Xóa embed cũ
+      await session.message.delete().catch(() => {});
+      if (session.progressInterval) clearInterval(session.progressInterval);
+      
+      // Reset lyrics cho bài mới
+      session.lines = [];
+      session.track = track;
+      
+      // Tạo embed mới với thông tin bài mới
+      const progress = player.getProgressBar?.({ timecodes: true, length: 15 }) || "0:00  advancement 0:00";
+      const { EmbedBuilder } = await import("discord.js");
+      
+      const newEmbed = new EmbedBuilder()
+        .setColor("#00FF00")
+        .setTitle(`🎶 ${track.title}`)
+        .setURL(track.url)
+        .setThumbnail(track.thumbnail)
+        .addFields(
+          { name: "👤 Ca sĩ", value: track.author || "Không rõ", inline: true },
+          { name: "⏱️ Thời lượng", value: String(track.duration || "N/A"), inline: true },
+          { name: "📡 Nguồn", value: track.source || "youtube", inline: true },
+          { name: "▶️ Tiến trình", value: `\`${progress}\`` },
+          { name: "🎤 Lyrics", value: "⏳ Đang tải lyrics..." }
+        )
+        .setFooter({ text: `🎵 /livelyrics off để tắt` })
+        .setTimestamp();
+      
+      // Gửi embed mới xuống dưới cùng
+      const newMessage = await channel.send({ embeds: [newEmbed] });
+      
+      session.embed = newEmbed;
+      session.message = newMessage;
+      
+      // Tạo lại interval cập nhật progress
+      session.progressInterval = setInterval(async () => {
+        try {
+          const currentPlayer = (await import("ziplayer")).getPlayer(guildId);
+          if (!currentPlayer || !currentPlayer.isPlaying) {
+            clearInterval(session.progressInterval);
+            return;
+          }
+          const newProgress = currentPlayer.getProgressBar?.({ timecodes: true, length: 15 }) || "";
+          if (newProgress) {
+            session.embed.spliceFields(3, 1, { name: "▶️ Tiến trình", value: `\`${newProgress}\`` });
+            await session.message.edit({ embeds: [session.embed] }).catch(() => {});
+          }
+        } catch (e) {}
+      }, 5000);
+      
+      console.log(`🔄 Created new embed for: ${track.title}`);
+    }
+  } else {
+    // Không có session, chỉ gửi thông báo đơn giản
+    channel?.send(`🎶 Đang phát: **${track.title}**`);
+  }
 });
+
 playerManager.on("trackEnd", (player, track) => {
   console.log(`🏁 Kết thúc: ${track.title}`);
 });
+
 playerManager.on("queueEnd", (player) => {
   console.log("📝 Queue trống, rời sau 30s");
   player.userdata.channel?.send("✅ Đã phát hết nhạc trong queue!");
+  
+  // Cleanup session khi hết queue
+  const guildId = player.guildId;
+  if (global.liveLyricsSessions && global.liveLyricsSessions.has(guildId)) {
+    const session = global.liveLyricsSessions.get(guildId);
+    if (session) {
+      if (session.progressInterval) clearInterval(session.progressInterval);
+      session.active = false;
+      session.embed
+        .setColor("#888888")
+        .spliceFields(4, 1, { name: "🎤 Lyrics", value: "⏹️ Đã dừng phát" });
+      session.message.edit({ embeds: [session.embed] }).catch(() => {});
+      global.liveLyricsSessions.delete(guildId);
+    }
+  }
 });
+
 playerManager.on("disconnect", (player) => {
   console.log("🚪 Bot đã rời voice channel");
   player.userdata.channel?.send("👋 Đã rời voice channel!");
 });
+
 playerManager.on("playerDestroy", (player) => {
   console.log("🚪 Bot đã rời voice channel");
   player.userdata.channel?.send("👋 Đã rời voice channel!");
+  
+  // Cleanup session
+  const guildId = player.guildId;
+  if (global.liveLyricsSessions && global.liveLyricsSessions.has(guildId)) {
+    const session = global.liveLyricsSessions.get(guildId);
+    if (session && session.progressInterval) clearInterval(session.progressInterval);
+    global.liveLyricsSessions.delete(guildId);
+  }
 });
 
-playerManager.on("debug", console.log);
+// Debug output đi qua hooked console.log để bắt lyrics
+playerManager.on("debug", (...args) => console.log(...args));
 
 // ===========================================
-playerManager.on("debug",console.log);
 client.login(TOKEN);

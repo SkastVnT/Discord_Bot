@@ -7,6 +7,7 @@ export default {
     .setDescription("📻 Bật/tắt chế độ tự động phát bài liên quan"),
 
   async run({ client, interaction }) {
+    await interaction.deferReply();
     try {
       const player = getPlayer(interaction.guildId);
 

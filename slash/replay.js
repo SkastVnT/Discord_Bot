@@ -7,6 +7,7 @@ export default {
     .setDescription("🔁 Phát lại bài hát hiện tại từ đầu"),
 
   async run({ client, interaction }) {
+    await interaction.deferReply();
     try {
       const player = getPlayer(interaction.guildId);
 

@@ -6,6 +6,7 @@ export default {
     .setDescription("❓ Hiển thị danh sách lệnh và hướng dẫn"),
 
   async run({ client, interaction }) {
+    await interaction.deferReply();
     try {
       const commands = client.slashcommands;
       

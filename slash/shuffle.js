@@ -7,6 +7,7 @@ export default {
     .setDescription("🔀 Trộn ngẫu nhiên danh sách chờ"),
 
   async run({ client, interaction }) {
+    await interaction.deferReply();
     try {
       const player = getPlayer(interaction.guildId);
 

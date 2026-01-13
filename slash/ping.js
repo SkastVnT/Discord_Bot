@@ -6,6 +6,7 @@ export default {
     .setDescription("🏓 Kiểm tra độ trễ của bot"),
 
   async run({ client, interaction }) {
+    await interaction.deferReply();
     try {
       const startTime = Date.now();
       await interaction.editReply("🏓 Pong!");

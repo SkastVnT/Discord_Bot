@@ -7,6 +7,7 @@ export default {
     .setDescription("⏱️ Hiển thị tổng thời gian đã phát nhạc trong session"),
 
   async run({ client, interaction }) {
+    await interaction.deferReply();
     try {
       const player = getPlayer(interaction.guildId);
 

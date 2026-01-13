@@ -7,6 +7,7 @@ export default {
     .setDescription("🚪 Cho bot rời khỏi voice channel"),
 
   async run({ client, interaction }) {
+    await interaction.deferReply();
     try {
       const player = getPlayer(interaction.guildId);
 

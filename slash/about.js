@@ -6,6 +6,7 @@ export default {
     .setDescription("ℹ️ Thông tin về bot"),
 
   async run({ client, interaction }) {
+    await interaction.deferReply();
     try {
       const uptime = process.uptime();
       const days = Math.floor(uptime / 86400);

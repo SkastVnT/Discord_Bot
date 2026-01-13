@@ -1,71 +1,30 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import { getManager, getPlayer } from "ziplayer";
+import { activeSessions } from "./livelyrics.js";
 
 export default {
   data: new SlashCommandBuilder()
     .setName("play")
-    .setDescription("Phát nhạc từ YouTube, Spotify, SoundCloud...")
-    .addSubcommand((sub) =>
-      sub
+    .setDescription("🎵 Phát nhạc (YouTube, Spotify - tự động detect)")
+    .addStringOption((opt) =>
+      opt
         .setName("song")
-        .setDescription("Phát một bài hát từ YouTube")
-        .addStringOption((opt) =>
-          opt.setName("url").setDescription("Đường dẫn YouTube").setRequired(true)
-        )
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("playlist")
-        .setDescription("Phát playlist từ YouTube")
-        .addStringOption((opt) =>
-          opt.setName("url").setDescription("Đường dẫn playlist YouTube").setRequired(true)
-        )
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("search")
-        .setDescription("Tìm kiếm bài hát theo tên")
-        .addStringOption((opt) =>
-          opt.setName("searchterms").setDescription("Tên bài hát").setRequired(true)
-        )
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("soundcloud")
-        .setDescription("Phát bài hát từ SoundCloud")
-        .addStringOption((opt) =>
-          opt.setName("url").setDescription("URL SoundCloud").setRequired(true)
-        )
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("spotify")
-        .setDescription("Phát bài hát từ Spotify")
-        .addStringOption((opt) =>
-          opt.setName("url").setDescription("URL Spotify").setRequired(true)
-        )
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("spotifyalbum")
-        .setDescription("Phát playlist / album Spotify")
-        .addStringOption((opt) =>
-          opt.setName("url").setDescription("URL Spotify album / playlist").setRequired(true)
-        )
+        .setDescription("Dán link hoặc nhập tên bài hát")
+        .setRequired(true)
     ),
 
   async run({ client, interaction }) {
+    const voiceChannel = interaction.member.voice.channel;
+    if (!voiceChannel) {
+      return interaction.reply({
+        content: "❌ Bạn cần vào voice channel trước!",
+        ephemeral: true,
+      });
+    }
+
+    await interaction.deferReply();
+
     try {
-      const sub = interaction.options.getSubcommand();
-      const voiceChannel = interaction.member.voice.channel;
-      if (!voiceChannel)
-        return interaction.reply({
-          content: "❌ Bạn cần vào voice channel trước!",
-          ephemeral: true,
-        });
-
-      await interaction.deferReply();
-
       let player = getPlayer(interaction.guildId);
       if (!player) {
         player = await getManager().create(interaction.guildId, {
@@ -81,56 +40,44 @@ export default {
 
       if (!player.connection) await player.connect(voiceChannel);
 
-      let query = interaction.options.getString("url") || interaction.options.getString("searchterms");
+      const query = interaction.options.getString("song");
+      console.log(`🔍 Query: ${query}`);
 
-      console.log(`🔍 Query: ${query}, Subcommand: ${sub}`);
-
-      // Search và lấy kết quả
+      // Search và lấy kết quả (tự động detect URL/tên)
       const result = await player.search(query, interaction.user);
 
       if (!result || !result.tracks.length) {
         return interaction.editReply("❌ Không tìm thấy kết quả nào!");
       }
 
-      console.log(`📊 Result type: ${result.playlist ? 'Playlist' : 'Single'}`);
-      if (result.playlist) {
-        console.log(`📀 Playlist: "${result.playlist.title}" with ${result.tracks.length} tracks`);
-      } else {
-        console.log(`🎵 Single track: "${result.tracks[0].title}"`);
-      }
-
       const embed = new EmbedBuilder().setColor(0x00ff99);
 
       // Xử lý playlist hoặc single track
       if (result.playlist && result.tracks.length > 1) {
-        // Playlist: phát bài đầu và add phần còn lại vào queue
         const firstTrack = result.tracks[0];
-        
-        // Nếu đang không phát gì, phát bài đầu tiên
+
         if (!player.isPlaying) {
           await player.play(firstTrack);
         } else {
-          // Nếu đang phát, add vào queue
           player.queue.add(firstTrack);
         }
 
-        // Add các bài còn lại vào queue
         if (result.tracks.length > 1) {
           player.queue.addMultiple(result.tracks.slice(1));
         }
 
         embed
           .setTitle("📀 Playlist đã thêm vào hàng chờ")
-          .setDescription(`**[${result.playlist.title || "Mix Playlist"}](${result.playlist.url || query})**`)
+          .setDescription(
+            `**[${result.playlist.title || "Mix Playlist"}](${result.playlist.url || query})**`
+          )
           .setThumbnail(result.playlist.thumbnail || firstTrack.thumbnail)
-          .setFooter({ 
-            text: `${result.tracks.length} bài hát | Yêu cầu bởi ${interaction.user.tag}` 
+          .setFooter({
+            text: `${result.tracks.length} bài hát | Yêu cầu bởi ${interaction.user.tag}`,
           });
-
       } else {
-        // Single track
         const track = result.tracks[0];
-        
+
         if (!player.isPlaying) {
           await player.play(track);
         } else {
@@ -141,13 +88,69 @@ export default {
           .setTitle("🎶 Đã thêm vào hàng chờ")
           .setDescription(`**[${track.title}](${track.url})**`)
           .setThumbnail(track.thumbnail)
-          .setFooter({ 
-            text: `⏱️ ${track.duration} | 👤 ${track.author}` 
+          .setFooter({
+            text: `⏱️ ${track.duration} | 👤 ${track.author}`,
           });
       }
 
       await interaction.editReply({ embeds: [embed] });
 
+      // Tự động bật Live Info + Lyrics
+      const guildId = interaction.guildId;
+      if (!activeSessions.has(guildId)) {
+        const track = result.tracks[0];
+        const progress =
+          player?.getProgressBar?.({ timecodes: true, length: 15 }) ||
+          "▶️ 0:00  advancement 0:00";
+
+        const combinedEmbed = new EmbedBuilder()
+          .setColor("#FF6B6B")
+          .setTitle(`🎶 ${track.title}`)
+          .setURL(track.url)
+          .setThumbnail(track.thumbnail)
+          .addFields(
+            { name: "👤 Ca sĩ", value: track.author || "Không rõ", inline: true },
+            { name: "⏱️ Thời lượng", value: String(track.duration || "N/A"), inline: true },
+            { name: "📡 Nguồn", value: track.source || "youtube", inline: true }
+          )
+          .addFields({ name: "▶️ Tiến trình", value: `\`${progress}\`` })
+          .addFields({ name: "🎤 Lyrics", value: "⏳ Đang chờ lyrics..." })
+          .setFooter({ text: `🧍 ${interaction.user.tag} | /livelyrics off để tắt` })
+          .setTimestamp();
+
+        const combinedMsg = await interaction.channel.send({ embeds: [combinedEmbed] });
+
+        const session = {
+          active: true,
+          message: combinedMsg,
+          embed: combinedEmbed,
+          track: track,
+          lines: [],
+          guildId: guildId,
+        };
+
+        session.progressInterval = setInterval(async () => {
+          try {
+            const currentPlayer = getPlayer(guildId);
+            if (!currentPlayer || !currentPlayer.isPlaying) {
+              clearInterval(session.progressInterval);
+              return;
+            }
+            const newProgress =
+              currentPlayer.getProgressBar?.({ timecodes: true, length: 15 }) || "";
+            if (newProgress) {
+              session.embed.spliceFields(3, 1, {
+                name: "▶️ Tiến trình",
+                value: `\`${newProgress}\``,
+              });
+              await session.message.edit({ embeds: [session.embed] }).catch(() => {});
+            }
+          } catch (e) {}
+        }, 5000);
+
+        activeSessions.set(guildId, session);
+        console.log(`🎤 Auto Live Info+Lyrics enabled for guild: ${guildId}`);
+      }
     } catch (err) {
       console.error("🚨 Lỗi phát nhạc:", err);
       await interaction.editReply(`❌ Lỗi: ${err.message}`);

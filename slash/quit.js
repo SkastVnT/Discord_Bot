@@ -7,6 +7,7 @@ export default {
     .setDescription("⛔ Dừng bot và xóa danh sách chờ"),
 
   async run({ client, interaction }) {
+    await interaction.deferReply();
     try {
       const player = getPlayer(interaction.guildId);
       if (!player) return interaction.editReply("❌ Không có hàng chờ để thoát.");

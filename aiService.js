@@ -136,11 +136,15 @@ async function callOpenAI(prompt, systemPrompt = "") {
  */
 export async function callAI(prompt, systemPrompt = "") {
   const providers = [
-    { name: "Gemini", fn: () => callGemini(prompt, systemPrompt) },
-    { name: "Grok", fn: () => callGrok(prompt, systemPrompt) },
-    { name: "DeepSeek", fn: () => callDeepSeek(prompt, systemPrompt) },
-    { name: "OpenAI", fn: () => callOpenAI(prompt, systemPrompt) },
-  ];
+    { name: "Gemini", fn: () => callGemini(prompt, systemPrompt), enabled: GEMINI_KEYS.length > 0 },
+    { name: "Grok", fn: () => callGrok(prompt, systemPrompt), enabled: !!GROK_API_KEY },
+    { name: "DeepSeek", fn: () => callDeepSeek(prompt, systemPrompt), enabled: !!DEEPSEEK_API_KEY },
+    { name: "OpenAI", fn: () => callOpenAI(prompt, systemPrompt), enabled: !!OPENAI_API_KEY },
+  ].filter(p => p.enabled);
+
+  if (providers.length === 0) {
+    throw new Error("No AI providers configured. Please add API keys to .env file.");
+  }
 
   for (const provider of providers) {
     try {
@@ -190,6 +194,36 @@ export async function searchGoogleLyrics(songName, artist) {
 }
 
 /**
+ * Crawl lyrics from a URL
+ */
+async function crawlLyricsFromUrl(url) {
+  try {
+    const response = await axios.get(url, {
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+    
+    const html = response.data;
+    
+    // Extract text content from common lyrics sites
+    let text = html
+      .replace(/<script[^>]*>.*?<\/script>/gi, '')
+      .replace(/<style[^>]*>.*?<\/style>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    
+    // Limit to reasonable length
+    return text.substring(0, 10000);
+  } catch (error) {
+    console.log(`❌ Failed to crawl ${url}:`, error.message);
+    return '';
+  }
+}
+
+/**
  * AI-powered lyrics finder with context understanding
  */
 export async function findLyricsWithAI(songName, artist) {
@@ -197,24 +231,45 @@ export async function findLyricsWithAI(songName, artist) {
     // Search Google for lyrics sources
     const searchResults = await searchGoogleLyrics(songName, artist);
     
-    const systemPrompt = `You are a lyrics expert. Your task is to find and return the COMPLETE lyrics for the EXACT song requested.
+    if (searchResults.length === 0) {
+      console.log("❌ No Google search results found");
+      return null;
+    }
+    
+    // Crawl top 3 results for actual content
+    console.log(`📥 Crawling top ${Math.min(3, searchResults.length)} results...`);
+    const crawledContent = [];
+    for (let i = 0; i < Math.min(3, searchResults.length); i++) {
+      const content = await crawlLyricsFromUrl(searchResults[i].link);
+      if (content) {
+        crawledContent.push({
+          url: searchResults[i].link,
+          title: searchResults[i].title,
+          content: content.substring(0, 3000) // Limit per page
+        });
+      }
+    }
+    
+    if (crawledContent.length === 0) {
+      console.log("❌ Could not crawl any content");
+      return null;
+    }
+    
+    const systemPrompt = `You are a lyrics extraction expert. Extract ONLY the complete song lyrics from the provided web content.
+
 CRITICAL RULES:
-1. Song name MUST match: "${songName}"
-2. Artist MUST match: "${artist}"
-3. Do NOT return lyrics from different songs, covers, or remixes
-4. If you cannot find the EXACT match, return "NOT_FOUND"
-5. Return ONLY the lyrics text, no other commentary
-6. Include the full lyrics from start to end`;
+1. Extract lyrics for: "${songName}" by "${artist}"
+2. Remove ALL navigation, ads, comments, and website content
+3. Return ONLY the pure lyrics text (verse, chorus, bridge, etc.)
+4. Keep original formatting with line breaks
+5. If lyrics not found or wrong song, return "NOT_FOUND"
+6. Do NOT add any commentary or explanations`;
 
-    const userPrompt = `Find the complete lyrics for this song:
-Song: "${songName}"
-Artist: "${artist}"
+    const userPrompt = `Extract the complete lyrics for "${songName}" by "${artist}" from these web pages:
 
-Google search results for context:
-${searchResults.map((r, i) => `${i + 1}. ${r.title}\n   ${r.snippet}\n   Link: ${r.link}`).join('\n\n')}
+${crawledContent.map((c, i) => `=== Page ${i + 1}: ${c.title} ===\n${c.content}\n`).join('\n\n')}
 
-Based on these search results, please provide the COMPLETE lyrics for "${songName}" by "${artist}".
-If this is NOT the correct song/artist combination, respond with only: NOT_FOUND`;
+Return ONLY the lyrics text.`;
 
     const lyrics = await callAI(userPrompt, systemPrompt);
     

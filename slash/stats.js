@@ -8,6 +8,7 @@ export default {
     .setDescription("📊 Hiển thị thống kê bot"),
 
   async run({ client, interaction }) {
+    await interaction.deferReply();
     try {
       const player = getPlayer(interaction.guildId);
       
