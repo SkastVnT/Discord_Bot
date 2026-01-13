@@ -129,6 +129,44 @@ const playerManager = new PlayerManager({
 });
 
 // ===========================================
+// ⏰ IDLE TIMEOUT - Auto leave sau 30 phút không phát nhạc
+const IDLE_TIMEOUT = 30 * 60 * 1000; // 30 phút
+const idleTimers = new Map(); // guildId -> timeout
+
+function resetIdleTimer(guildId, player) {
+  // Xóa timer cũ nếu có
+  if (idleTimers.has(guildId)) {
+    clearTimeout(idleTimers.get(guildId));
+    idleTimers.delete(guildId);
+  }
+}
+
+function startIdleTimer(guildId, player) {
+  // Xóa timer cũ nếu có
+  resetIdleTimer(guildId, player);
+  
+  // Đặt timer mới
+  const timer = setTimeout(async () => {
+    try {
+      const { getPlayer } = await import("ziplayer");
+      const currentPlayer = getPlayer(guildId);
+      
+      if (currentPlayer && !currentPlayer.isPlaying) {
+        console.log(`⏰ [${guildId}] Idle timeout 30 phút - Tự động rời voice channel`);
+        currentPlayer.userdata?.channel?.send("⏰ Đã 30 phút không phát nhạc - Bot tự động rời voice channel. Gọi `/play` để mời lại!");
+        currentPlayer.destroy();
+      }
+      idleTimers.delete(guildId);
+    } catch (e) {
+      console.error("Idle timer error:", e);
+    }
+  }, IDLE_TIMEOUT);
+  
+  idleTimers.set(guildId, timer);
+  console.log(`⏰ [${guildId}] Bắt đầu đếm idle 30 phút`);
+}
+
+// ===========================================
 // 🔄 Load Slash Commands
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -235,6 +273,9 @@ playerManager.on("audioTrackAdd", (player, track) => {
 playerManager.on("trackStart", async (player, track) => {
   console.log(`▶️ Bắt đầu phát: ${track.title}`);
   
+  // Reset idle timer khi có nhạc phát
+  resetIdleTimer(player.guildId, player);
+  
   // Cập nhật Live Info+Lyrics embed khi chuyển bài
   const guildId = player.guildId;
   const channel = player.userdata.channel;
@@ -304,8 +345,11 @@ playerManager.on("trackEnd", (player, track) => {
 });
 
 playerManager.on("queueEnd", (player) => {
-  console.log("📝 Queue trống, rời sau 30s");
-  player.userdata.channel?.send("✅ Đã phát hết nhạc trong queue!");
+  console.log("📝 Queue trống, bắt đầu đếm idle 30 phút");
+  player.userdata.channel?.send("✅ Đã phát hết nhạc! Bot sẽ tự rời sau 30 phút nếu không phát nhạc mới.");
+  
+  // Bắt đầu đếm idle timer
+  startIdleTimer(player.guildId, player);
   
   // Cleanup session khi hết queue
   const guildId = player.guildId;
@@ -325,12 +369,15 @@ playerManager.on("queueEnd", (player) => {
 
 playerManager.on("disconnect", (player) => {
   console.log("🚪 Bot đã rời voice channel");
-  player.userdata.channel?.send("👋 Đã rời voice channel!");
+  // Xóa idle timer khi disconnect
+  resetIdleTimer(player.guildId, player);
 });
 
 playerManager.on("playerDestroy", (player) => {
   console.log("🚪 Bot đã rời voice channel");
-  player.userdata.channel?.send("👋 Đã rời voice channel!");
+  
+  // Xóa idle timer
+  resetIdleTimer(player.guildId, player);
   
   // Cleanup session
   const guildId = player.guildId;

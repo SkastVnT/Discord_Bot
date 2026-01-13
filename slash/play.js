@@ -40,8 +40,28 @@ export default {
 
       if (!player.connection) await player.connect(voiceChannel);
 
-      const query = interaction.options.getString("song");
+      let query = interaction.options.getString("song") || interaction.options.getString("query") || interaction.options.getString("url");
       console.log(`🔍 Query: ${query}`);
+
+      if (!query) {
+        return interaction.editReply("❌ Vui lòng nhập tên bài hát hoặc link!");
+      }
+
+      // Detect Spotify URL và convert sang YouTube search
+      const isSpotifyUrl = query.includes("spotify.com/track") || query.includes("spotify.com/album") || query.includes("spotify.com/playlist");
+      let spotifyMetadata = null;
+      
+      if (isSpotifyUrl) {
+        console.log("🎵 Detected Spotify URL, fetching metadata...");
+        const spotifyResult = await player.search(query, interaction.user);
+        if (spotifyResult && spotifyResult.tracks.length > 0) {
+          spotifyMetadata = spotifyResult.tracks[0];
+          // Dùng tên bài + tác giả để search YouTube
+          const searchQuery = `${spotifyMetadata.title} ${spotifyMetadata.author || spotifyMetadata.metadata?.author || ""}`.trim();
+          console.log(`🔄 Converting Spotify to YouTube search: ${searchQuery}`);
+          query = searchQuery;
+        }
+      }
 
       // Search và lấy kết quả (tự động detect URL/tên)
       const result = await player.search(query, interaction.user);
