@@ -2,6 +2,8 @@
 // ===========================================
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
+const { YTexec } = require("@ziplayer/ytexecplug");
+const ytbplg = new YouTubePlugin({ player: null });
 
 // ===========================================
 import dotenv from "dotenv";
@@ -20,10 +22,17 @@ import {
   YouTubePlugin,
   SoundCloudPlugin,
   SpotifyPlugin,
-  YTSRPlugin,
+  // YTSRPlugin,
 } from "@ziplayer/plugin";
 
 import { lyricsExt } from "@ziplayer/extension";
+
+ytbplg.getStream = new YTexec().getStream;
+
+//create Player Manager
+const playerManager = new PlayerManager({
+    plugins: [ ytbplg ], // Removed SoundCloudPlugin due to client_id issues
+});  
 
 // ===========================================
 // 🧩 Dependency Check
@@ -123,10 +132,10 @@ client.slashcommands = new Collection();
 
 // ===========================================
 // 🎧 PLAYER CONFIG
-const playerManager = new PlayerManager({
-  plugins: [new YTSRPlugin(), new YouTubePlugin(), new SpotifyPlugin()], // Removed SoundCloudPlugin due to client_id issues
-  extensions: [new lyricsExt()],
-});
+// const playerManager = new PlayerManager({
+//   plugins: [new YTSRPlugin(), new YouTubePlugin(), new SpotifyPlugin()], // Removed SoundCloudPlugin due to client_id issues
+//   extensions: [new lyricsExt()],
+// });
 
 // ===========================================
 // ⏰ IDLE TIMEOUT - Auto leave sau 30 phút không phát nhạc
