@@ -1,5 +1,6 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
+import { findLyricsWithAI } from "../aiService.js";
 
 // Store active live lyrics sessions - use global to share between instances
 if (!global.liveLyricsSessions) {
@@ -39,6 +40,9 @@ export default {
       const session = activeSessions.get(guildId);
       if (session) {
         session.active = false;
+        if (session.lyricsInterval) clearInterval(session.lyricsInterval);
+        if (session.progressInterval) clearInterval(session.progressInterval);
+        if (session.checkInterval) clearInterval(session.checkInterval);
         activeSessions.delete(guildId);
         return interaction.editReply("⏹️ Đã tắt live lyrics!");
       }
@@ -54,11 +58,19 @@ export default {
 
     // Create initial embed
     const embed = new EmbedBuilder()
-      .setColor("#00FF00")
-      .setTitle(`🎤 ${track.title}`)
-      .setDescription(`✅ Live lyrics đã bật!\n\n👤 ${track.author || 'Unknown'}\n\n⏳ Đang chờ lyrics...`)
+      .setColor("#FF6B6B")
+      .setTitle(`🎶 ${track.title}`)
+      .setURL(track.url)
       .setThumbnail(track.thumbnail)
-      .setFooter({ text: "🎵 /livelyrics off để tắt" });
+      .addFields(
+        { name: "👤 Ca sĩ", value: track.author || "Không rõ", inline: true },
+        { name: "⏱️ Thời lượng", value: String(track.duration || "N/A"), inline: true },
+        { name: "📡 Nguồn", value: track.source || "youtube", inline: true },
+        { name: "▶️ Tiến trình", value: "`0:00  advancement 0:00`" },
+        { name: "🎤 Lyrics", value: "⏳ Đang tìm lyrics bằng AI..." }
+      )
+      .setFooter({ text: "🎵 /livelyrics off để tắt" })
+      .setTimestamp();
 
     const message = await interaction.editReply({ embeds: [embed] });
 
@@ -69,9 +81,30 @@ export default {
       embed,
       track,
       lines: [],
+      allLyrics: [],
+      currentLineIndex: 0,
       guildId
     };
     activeSessions.set(guildId, session);
+
+    // Start progress bar updates
+    session.progressInterval = setInterval(async () => {
+      try {
+        const currentPlayer = getPlayer(guildId);
+        if (!currentPlayer || !currentPlayer.isPlaying) {
+          clearInterval(session.progressInterval);
+          return;
+        }
+        const newProgress = currentPlayer.getProgressBar?.({ timecodes: true, length: 15 }) || "";
+        if (newProgress) {
+          session.embed.spliceFields(3, 1, { name: "▶️ Tiến trình", value: `\`${newProgress}\`` });
+          await session.message.edit({ embeds: [session.embed] }).catch(() => {});
+        }
+      } catch (e) {}
+    }, 5000);
+
+    // Fetch lyrics via AI and start live display
+    fetchAndDisplayLyrics(session, track);
 
     // Auto cleanup after track ends
     const checkInterval = setInterval(async () => {
@@ -83,21 +116,13 @@ export default {
       
       const currentPlayer = getPlayer(guildId);
       if (!currentPlayer || !currentPlayer.isPlaying) {
-        currentSession.embed.setDescription("⏹️ Bài hát đã dừng!");
+        if (currentSession.lyricsInterval) clearInterval(currentSession.lyricsInterval);
+        if (currentSession.progressInterval) clearInterval(currentSession.progressInterval);
+        currentSession.embed.spliceFields(4, 1, { name: "🎤 Lyrics", value: "⏹️ Bài hát đã dừng!" });
         currentSession.embed.setColor("#888888");
         await currentSession.message.edit({ embeds: [currentSession.embed] }).catch(() => {});
         activeSessions.delete(guildId);
         clearInterval(checkInterval);
-      } else if (currentPlayer.currentTrack?.title !== currentSession.track.title) {
-        // Track changed - update session
-        currentSession.track = currentPlayer.currentTrack;
-        currentSession.lines = [];
-        currentSession.embed
-          .setTitle(`🎤 ${currentPlayer.currentTrack.title}`)
-          .setDescription(`🔄 Đang phát bài mới...\n\n👤 ${currentPlayer.currentTrack.author || 'Unknown'}`)
-          .setThumbnail(currentPlayer.currentTrack.thumbnail)
-          .setColor("#00FF00");
-        await currentSession.message.edit({ embeds: [currentSession.embed] }).catch(() => {});
       }
     }, 3000);
     
@@ -105,35 +130,87 @@ export default {
   },
 };
 
-// Function to update lyrics - called from index.js
-export function updateLiveLyrics(guildId, line) {
-  const session = activeSessions.get(guildId);
-  if (!session || !session.active) return;
-  
-  // Add new line
-  session.lines.push(line);
-  
-  // Keep only last 5 lines
-  if (session.lines.length > 5) {
-    session.lines.shift();
+/**
+ * Fetch lyrics from AI and start progressive display
+ */
+export async function fetchAndDisplayLyrics(session, track) {
+  try {
+    const lyrics = await findLyricsWithAI(track.title, track.author || "");
+    
+    if (!lyrics || !session.active) {
+      if (session.active) {
+        session.embed.spliceFields(4, 1, { name: "🎤 Lyrics", value: "❌ Không tìm thấy lyrics cho bài này" });
+        await session.message.edit({ embeds: [session.embed] }).catch(() => {});
+      }
+      return;
+    }
+
+    // Parse lyrics into lines (filter empty)
+    const allLines = lyrics.split("\n").filter(l => l.trim().length > 0);
+    session.allLyrics = allLines;
+    session.currentLineIndex = 0;
+    session.lines = [];
+
+    // Calculate time per line based on track duration
+    const durationMs = parseDuration(track.duration);
+    const timePerLine = durationMs > 0 ? Math.max(2000, Math.floor(durationMs / allLines.length)) : 4000;
+
+    console.log(`🎤 Lyrics loaded: ${allLines.length} lines, ~${timePerLine}ms/line`);
+
+    // Start progressive lyrics display
+    session.lyricsInterval = setInterval(() => {
+      if (!session.active || session.currentLineIndex >= session.allLyrics.length) {
+        if (session.lyricsInterval) clearInterval(session.lyricsInterval);
+        return;
+      }
+
+      const currentLine = session.allLyrics[session.currentLineIndex];
+      session.lines.push(currentLine);
+      session.currentLineIndex++;
+
+      // Keep only last 6 lines visible
+      if (session.lines.length > 6) {
+        session.lines.shift();
+      }
+
+      // Build display
+      let display = "";
+      for (let i = 0; i < session.lines.length - 1; i++) {
+        display += `┃ *${session.lines[i]}*\n`;
+      }
+      if (session.lines.length > 0) {
+        display += `┃ **➤ ${session.lines[session.lines.length - 1]}**`;
+      }
+
+      session.embed.spliceFields(4, 1, { name: "🎤 Lyrics", value: display || "⏳ Đang chờ lyrics..." });
+      session.message.edit({ embeds: [session.embed] }).catch(() => {});
+    }, timePerLine);
+
+  } catch (error) {
+    console.error("❌ Error fetching lyrics:", error.message);
+    if (session.active) {
+      session.embed.spliceFields(4, 1, { name: "🎤 Lyrics", value: "❌ Lỗi khi tìm lyrics" });
+      session.message.edit({ embeds: [session.embed] }).catch(() => {});
+    }
   }
+}
+
+/**
+ * Parse duration string (e.g. "3:45" or "1:02:30") to milliseconds
+ */
+function parseDuration(durationStr) {
+  if (!durationStr) return 0;
+  const str = String(durationStr);
+  const parts = str.split(":").map(Number);
+  if (parts.some(isNaN)) return 0;
   
-  // Build display
-  let display = "";
-  
-  // Previous lines (dimmed)
-  for (let i = 0; i < session.lines.length - 1; i++) {
-    display += `*${session.lines[i]}*\n`;
+  let seconds = 0;
+  if (parts.length === 3) {
+    seconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
+  } else if (parts.length === 2) {
+    seconds = parts[0] * 60 + parts[1];
+  } else {
+    seconds = parts[0];
   }
-  
-  // Current line (highlighted)
-  if (session.lines.length > 0) {
-    display += `\n**🎤 ${session.lines[session.lines.length - 1]}**\n`;
-  }
-  
-  session.embed
-    .setDescription(display || "⏳ Đang chờ lyrics...")
-    .setColor("#FF6B6B");
-  
-  session.message.edit({ embeds: [session.embed] }).catch(() => {});
+  return seconds * 1000;
 }

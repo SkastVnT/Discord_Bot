@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import { getManager, getPlayer } from "ziplayer";
-import { activeSessions } from "./livelyrics.js";
+import { activeSessions, fetchAndDisplayLyrics } from "./livelyrics.js";
 
 export default {
   data: new SlashCommandBuilder()
@@ -34,7 +34,6 @@ export default {
           leaveOnEmpty: false,
           leaveOnEnd: false,
           leaveOnStop: false,
-          extensions: ["lyricsExt"],
         });
       }
 
@@ -134,7 +133,7 @@ export default {
             { name: "📡 Nguồn", value: track.source || "youtube", inline: true }
           )
           .addFields({ name: "▶️ Tiến trình", value: `\`${progress}\`` })
-          .addFields({ name: "🎤 Lyrics", value: "⏳ Đang chờ lyrics..." })
+          .addFields({ name: "🎤 Lyrics", value: "⏳ Đang tìm lyrics bằng AI..." })
           .setFooter({ text: `🧍 ${interaction.user.tag} | /livelyrics off để tắt` })
           .setTimestamp();
 
@@ -146,6 +145,8 @@ export default {
           embed: combinedEmbed,
           track: track,
           lines: [],
+          allLyrics: [],
+          currentLineIndex: 0,
           guildId: guildId,
         };
 
@@ -170,6 +171,9 @@ export default {
 
         activeSessions.set(guildId, session);
         console.log(`🎤 Auto Live Info+Lyrics enabled for guild: ${guildId}`);
+
+        // Fetch lyrics via AI and start live display
+        fetchAndDisplayLyrics(session, track);
       }
     } catch (err) {
       console.error("🚨 Lỗi phát nhạc:", err);

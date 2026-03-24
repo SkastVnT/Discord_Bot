@@ -25,7 +25,7 @@ import {
   // YTSRPlugin,
 } from "@ziplayer/plugin";
 
-import { lyricsExt } from "@ziplayer/extension";
+import { fetchAndDisplayLyrics } from "./slash/livelyrics.js";
 
 ytbplg.getStream = new YTexec().getStream;
 
@@ -58,52 +58,6 @@ console.log("✅ Audio dependencies loaded successfully!");
 console.log("--------------------------------------------------");
 
 if (ffmpeg) process.env.FFMPEG_PATH = ffmpeg;
-
-// ===========================================
-// 🎤 Live Lyrics Hook - Must be set BEFORE PlayerManager
-const originalConsoleLog = console.log;
-console.log = (...args) => {
-  originalConsoleLog(...args);
-  
-  // Check for lyricsExt emit line
-  const msg = args[0];
-  if (typeof msg === 'string' && msg.includes('[lyricsExt] emit line')) {
-    // Parse: [lyricsExt] emit line idx=0 t=1000 "lyrics text here"
-    const match = msg.match(/\[lyricsExt\] emit line idx=\d+ t=\d+ "(.+)"/);
-    if (match && match[1]) {
-      const lyricLine = match[1];
-      originalConsoleLog(`📝 Caught lyric: ${lyricLine}`);
-      // Update all active sessions using global
-      if (global.liveLyricsSessions) {
-        for (const [guildId, session] of global.liveLyricsSessions) {
-          if (session && session.active) {
-            // Inline update logic
-            session.lines = session.lines || [];
-            session.lines.push(lyricLine);
-            if (session.lines.length > 4) session.lines.shift();
-            
-            let display = "";
-            for (let i = 0; i < session.lines.length - 1; i++) {
-              display += `┃ *${session.lines[i]}*\n`;
-            }
-            if (session.lines.length > 0) {
-              display += `┃ **➤ ${session.lines[session.lines.length - 1]}**`;
-            }
-            
-            // Update lyrics field (index 4) instead of description
-            try {
-              session.embed.spliceFields(4, 1, { name: "🎤 Lyrics", value: display || "⏳ Đang chờ lyrics..." });
-              session.message.edit({ embeds: [session.embed] }).catch(() => {});
-              originalConsoleLog(`📤 Updated lyrics for guild: ${guildId}`);
-            } catch (e) {
-              originalConsoleLog(`❌ Error updating lyrics: ${e.message}`);
-            }
-          }
-        }
-      }
-    }
-  }
-};
 
 // ===========================================
 const TOKEN = process.env.TOKEN;
@@ -295,9 +249,12 @@ playerManager.on("trackStart", async (player, track) => {
       // Xóa embed cũ
       await session.message.delete().catch(() => {});
       if (session.progressInterval) clearInterval(session.progressInterval);
+      if (session.lyricsInterval) clearInterval(session.lyricsInterval);
       
       // Reset lyrics cho bài mới
       session.lines = [];
+      session.allLyrics = [];
+      session.currentLineIndex = 0;
       session.track = track;
       
       // Tạo embed mới với thông tin bài mới
@@ -305,7 +262,7 @@ playerManager.on("trackStart", async (player, track) => {
       const { EmbedBuilder } = await import("discord.js");
       
       const newEmbed = new EmbedBuilder()
-        .setColor("#00FF00")
+        .setColor("#FF6B6B")
         .setTitle(`🎶 ${track.title}`)
         .setURL(track.url)
         .setThumbnail(track.thumbnail)
@@ -314,7 +271,7 @@ playerManager.on("trackStart", async (player, track) => {
           { name: "⏱️ Thời lượng", value: String(track.duration || "N/A"), inline: true },
           { name: "📡 Nguồn", value: track.source || "youtube", inline: true },
           { name: "▶️ Tiến trình", value: `\`${progress}\`` },
-          { name: "🎤 Lyrics", value: "⏳ Đang tải lyrics..." }
+          { name: "🎤 Lyrics", value: "⏳ Đang tìm lyrics bằng AI..." }
         )
         .setFooter({ text: `🎵 /livelyrics off để tắt` })
         .setTimestamp();
@@ -341,6 +298,9 @@ playerManager.on("trackStart", async (player, track) => {
         } catch (e) {}
       }, 5000);
       
+      // Fetch lyrics via AI cho bài mới
+      fetchAndDisplayLyrics(session, track);
+      
       console.log(`🔄 Created new embed for: ${track.title}`);
     }
   } else {
@@ -366,6 +326,7 @@ playerManager.on("queueEnd", (player) => {
     const session = global.liveLyricsSessions.get(guildId);
     if (session) {
       if (session.progressInterval) clearInterval(session.progressInterval);
+      if (session.lyricsInterval) clearInterval(session.lyricsInterval);
       session.active = false;
       session.embed
         .setColor("#888888")
@@ -392,13 +353,13 @@ playerManager.on("playerDestroy", (player) => {
   const guildId = player.guildId;
   if (global.liveLyricsSessions && global.liveLyricsSessions.has(guildId)) {
     const session = global.liveLyricsSessions.get(guildId);
-    if (session && session.progressInterval) clearInterval(session.progressInterval);
+    if (session) {
+      if (session.progressInterval) clearInterval(session.progressInterval);
+      if (session.lyricsInterval) clearInterval(session.lyricsInterval);
+    }
     global.liveLyricsSessions.delete(guildId);
   }
 });
-
-// Debug output đi qua hooked console.log để bắt lyrics
-playerManager.on("debug", (...args) => console.log(...args));
 
 // ===========================================
 client.login(TOKEN);
