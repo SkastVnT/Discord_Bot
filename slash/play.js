@@ -2,6 +2,72 @@ import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import { getManager, getPlayer } from "ziplayer";
 import { activeSessions, fetchAndDisplayLyrics } from "./livelyrics.js";
 
+function extractYouTubeVideoId(input) {
+  try {
+    const url = new URL(input);
+    const host = url.hostname.toLowerCase();
+
+    if (host === "youtu.be") {
+      return url.pathname.split("/").filter(Boolean)[0] || null;
+    }
+
+    if (host.includes("youtube.com")) {
+      if (url.pathname === "/watch") {
+        return url.searchParams.get("v");
+      }
+
+      const parts = url.pathname.split("/").filter(Boolean);
+      if ((parts[0] === "shorts" || parts[0] === "live") && parts[1]) {
+        return parts[1];
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function buildYouTubeSearchCandidates(query) {
+  const candidates = [query];
+  const videoId = extractYouTubeVideoId(query);
+
+  if (!videoId) return candidates;
+
+  const canonicalUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  const shortUrl = `https://youtu.be/${videoId}`;
+
+  if (!candidates.includes(canonicalUrl)) candidates.push(canonicalUrl);
+  if (!candidates.includes(shortUrl)) candidates.push(shortUrl);
+  if (!candidates.includes(videoId)) candidates.push(videoId);
+
+  return candidates;
+}
+
+async function searchWithFallback(player, query, requestedBy) {
+  const candidates = buildYouTubeSearchCandidates(query);
+  let lastError = null;
+
+  for (const candidate of candidates) {
+    try {
+      if (candidate !== query) {
+        console.log(`[play] Retry search with fallback candidate: ${candidate}`);
+      }
+
+      const result = await player.search(candidate, requestedBy);
+      if (result && result.tracks && result.tracks.length) {
+        return result;
+      }
+    } catch (err) {
+      lastError = err;
+      console.log(`[play] Search candidate failed: ${candidate} -> ${err.message}`);
+    }
+  }
+
+  if (lastError) throw lastError;
+  return null;
+}
+
 export default {
   data: new SlashCommandBuilder()
     .setName("play")
@@ -63,7 +129,7 @@ export default {
       }
 
       // Search và lấy kết quả (tự động detect URL/tên)
-      const result = await player.search(query, interaction.user);
+      const result = await searchWithFallback(player, query, interaction.user);
 
       if (!result || !result.tracks.length) {
         return interaction.editReply("❌ Không tìm thấy kết quả nào!");

@@ -3,7 +3,7 @@
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 const { YTexec } = require("@ziplayer/ytexecplug");
-const ytbplg = new YouTubePlugin({ player: null });
+const ytbplg = new YouTubePlugin();
 
 // ===========================================
 import dotenv from "dotenv";
