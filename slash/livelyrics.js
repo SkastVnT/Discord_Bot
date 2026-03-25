@@ -131,11 +131,44 @@ export default {
 };
 
 /**
+ * Strip YouTube junk from track title to get clean song name
+ */
+function cleanTitle(title) {
+  if (!title) return title;
+  return title
+    // Remove everything from first | onwards (handles both | and ||)
+    .replace(/\s*\|+.*$/s, '')
+    // Remove common suffixes in parens/brackets
+    .replace(/\s*[\(\[]\s*(lyric[s]?|official|audio|video|mv|hd|4k|full|remix|cover|version|ost|feat[.\s].*|ft[.\s].*)([\)\]].*)*/gi, '')
+    // Remove trailing " - Lyric/Official/etc"
+    .replace(/\s*[-\u2013]\s*(lyric[s]?|official|audio|video|mv|hd|4k|full|ost).*$/gi, '')
+    .trim();
+}
+
+/**
+ * Try to extract artist from YouTube title (e.g. "Song Name - Artist" or "Artist - Song Name")
+ */
+function extractArtistFromTitle(title) {
+  // Pattern: "Song || Artist || ..."
+  const pipeMatch = title.match(/\|\|\s*([^|]+?)\s*\|\|/);
+  if (pipeMatch) return pipeMatch[1].trim();
+  // Pattern: "Song - Artist" or "Artist - Song"
+  const dashMatch = title.match(/^(.+?)\s*[-–]\s*(.+)$/);
+  if (dashMatch) return dashMatch[2].trim();
+  return "";
+}
+
+/**
  * Fetch lyrics from AI and start progressive display
  */
 export async function fetchAndDisplayLyrics(session, track) {
   try {
-    const lyrics = await findLyricsWithAI(track.title, track.author || "");
+    const cleanedTitle = cleanTitle(track.title);
+    const artist = track.author || extractArtistFromTitle(track.title) || "";
+
+    console.log(`🎤 Sending to AI → title: "${cleanedTitle}", artist: "${artist}"`);
+
+    const lyrics = await findLyricsWithAI(cleanedTitle, artist);
     
     if (!lyrics || !session.active) {
       if (session.active) {
@@ -151,14 +184,15 @@ export async function fetchAndDisplayLyrics(session, track) {
     session.currentLineIndex = 0;
     session.lines = [];
 
-    // Calculate time per line based on track duration
+    // Calculate time per line: clamp between 2s and 8s
     const durationMs = parseDuration(track.duration);
-    const timePerLine = durationMs > 0 ? Math.max(2000, Math.floor(durationMs / allLines.length)) : 4000;
+    const rawTimePerLine = durationMs > 0 ? Math.floor(durationMs / allLines.length) : 4000;
+    const timePerLine = Math.min(8000, Math.max(2000, rawTimePerLine));
 
-    console.log(`🎤 Lyrics loaded: ${allLines.length} lines, ~${timePerLine}ms/line`);
+    console.log(`🎤 Lyrics loaded: ${allLines.length} lines, ~${timePerLine}ms/line (raw: ${rawTimePerLine}ms)`);
 
-    // Start progressive lyrics display
-    session.lyricsInterval = setInterval(() => {
+    // Helper to advance and display one line
+    const showNextLine = () => {
       if (!session.active || session.currentLineIndex >= session.allLyrics.length) {
         if (session.lyricsInterval) clearInterval(session.lyricsInterval);
         return;
@@ -184,7 +218,11 @@ export async function fetchAndDisplayLyrics(session, track) {
 
       session.embed.spliceFields(4, 1, { name: "🎤 Lyrics", value: display || "⏳ Đang chờ lyrics..." });
       session.message.edit({ embeds: [session.embed] }).catch(() => {});
-    }, timePerLine);
+    };
+
+    // Show first line immediately, then interval for subsequent lines
+    showNextLine();
+    session.lyricsInterval = setInterval(showNextLine, timePerLine);
 
   } catch (error) {
     console.error("❌ Error fetching lyrics:", error.message);
@@ -214,3 +252,6 @@ function parseDuration(durationStr) {
   }
   return seconds * 1000;
 }
+
+// Always keep global reference updated so index.js hot-reload picks up latest version
+global.fetchAndDisplayLyrics = fetchAndDisplayLyrics;

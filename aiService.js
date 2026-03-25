@@ -1,5 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import axios from "axios";
+import dotenv from "dotenv";
+dotenv.config();
 
 const GEMINI_KEYS = [
   process.env.GEMINI_API_KEY_1,
@@ -160,56 +162,67 @@ export async function callAI(prompt, systemPrompt = "") {
 }
 
 /**
- * Find lyrics using OpenAI o4-mini directly
+ * Find lyrics using OpenAI o4-mini, with fallback to callAI (Gemini/Grok/DeepSeek)
  */
 export async function findLyricsWithAI(songName, artist) {
-  if (!OPENAI_API_KEY) {
-    console.log("❌ OpenAI API key not configured");
-    return null;
-  }
+  const systemPrompt = `You are a music lyrics expert. Return ONLY the complete song lyrics.
+- Original language, no translation
+- Each lyric line on its own line (\\n separated)
+- Blank line between sections
+- No section labels like [Verse], [Chorus]
+- No commentary or explanations
+- If not found: NOT_FOUND`;
 
-  try {
-    console.log(`🔍 Tìm lyrics: "${songName}" - ${artist}`);
+  const userPrompt = `Full lyrics for "${songName}"${artist ? ` by ${artist}` : ''}`;
 
-    const systemPrompt = `You are a lyrics database. Return ONLY the complete song lyrics, nothing else.
-Rules:
-- Return the full original lyrics (in the original language of the song)
-- Keep line breaks between lines
-- Separate sections (verse, chorus, bridge) with a blank line
-- Do NOT include section labels like [Verse], [Chorus] etc.
-- Do NOT add commentary, translation, or explanation
-- If you cannot find the lyrics, return exactly: NOT_FOUND`;
+  const REFUSAL_KEYWORDS = ['copyright', 'unable to provide', 'cannot provide', "can't provide",
+    'i cannot', "i can't", 'not able to', 'sorry', 'restricted', 'protected',
+    'do not have access', "don't have access", 'not available'];
 
-    const userPrompt = `Lyrics for "${songName}" by "${artist}"`;
+  const isRefusal = (text) =>
+    REFUSAL_KEYWORDS.some(k => text.toLowerCase().includes(k)) || text.length < 200;
 
-    const response = await axios.post(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        model: "o4-mini",
-        messages: [
-          { role: "developer", content: systemPrompt },
-          { role: "user", content: userPrompt }
-        ],
-      },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${OPENAI_API_KEY}`,
+  console.log(`🔍 Tìm lyrics: "${songName}" - ${artist}`);
+
+  // Try o4-mini first
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (apiKey) {
+    try {
+      const response = await axios.post(
+        'https://api.openai.com/v1/chat/completions',
+        {
+          model: 'o4-mini',
+          messages: [
+            { role: 'developer', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
         },
+        {
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        }
+      );
+      const text = response.data.choices[0].message.content.trim();
+      if (text && text !== 'NOT_FOUND' && !isRefusal(text)) {
+        console.log(`✅ o4-mini: ${text.length} ký tự`);
+        return text;
       }
-    );
-
-    const lyrics = response.data.choices[0].message.content.trim();
-
-    if (!lyrics || lyrics === "NOT_FOUND" || lyrics.length < 30) {
-      console.log("❌ Không tìm thấy lyrics");
-      return null;
+      console.log(`⚠️ o4-mini refused hoặc quá ngắn (${text.length} chars), thử Gemini...`);
+    } catch (e) {
+      console.log('⚠️ o4-mini failed:', e.message);
     }
-
-    console.log(`✅ Đã tìm thấy lyrics (${lyrics.length} ký tự)`);
-    return lyrics;
-  } catch (error) {
-    console.error("❌ OpenAI lyrics search failed:", error.message);
-    return null;
   }
+
+  // Fallback: Gemini / Grok / DeepSeek via callAI
+  try {
+    const text = await callAI(userPrompt, systemPrompt);
+    if (text && text !== 'NOT_FOUND' && !isRefusal(text)) {
+      console.log(`✅ Fallback AI: ${text.length} ký tự`);
+      return text;
+    }
+  } catch (e) {
+    console.log('❌ Fallback AI failed:', e.message);
+  }
+
+  console.log('❌ Không tìm thấy lyrics');
+  return null;
 }

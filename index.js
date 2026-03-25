@@ -27,6 +27,11 @@ import {
 
 import { fetchAndDisplayLyrics } from "./slash/livelyrics.js";
 
+function callFetchAndDisplayLyrics(session, track) {
+  const fn = global.fetchAndDisplayLyrics || fetchAndDisplayLyrics;
+  fn(session, track);
+}
+
 ytbplg.getStream = new YTexec().getStream;
 
 //create Player Manager
@@ -299,7 +304,7 @@ playerManager.on("trackStart", async (player, track) => {
       }, 5000);
       
       // Fetch lyrics via AI cho bài mới
-      fetchAndDisplayLyrics(session, track);
+      callFetchAndDisplayLyrics(session, track);
       
       console.log(`🔄 Created new embed for: ${track.title}`);
     }
