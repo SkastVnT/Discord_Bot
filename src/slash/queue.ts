@@ -1,0 +1,70 @@
+import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
+import { getPlayer } from "ziplayer";
+import type { SlashCommand } from "../types/command.js";
+
+// Bug fix #2: removed dead code block after try/catch that used old API
+// (interaction.channel.send, player.playing, manager.players.get — all unreachable)
+
+const cmd: SlashCommand = {
+  data: new SlashCommandBuilder()
+    .setName("queue")
+    .setDescription("📜 Hiển thị danh sách bài hát trong hàng chờ")
+    .addNumberOption((option) =>
+      option.setName("page").setDescription("Trang danh sách (1, 2, 3...)").setMinValue(1),
+    ),
+
+  async run({ client: _client, interaction }) {
+    try {
+      await interaction.deferReply();
+
+      const player = getPlayer(interaction.guildId!);
+      if (!player || !player.isPlaying) {
+        return interaction.editReply("❌ Không có bài hát nào trong danh sách chờ!");
+      }
+
+      if (!player.queue?.tracks) {
+        return interaction.editReply("❌ Không thể truy cập hàng chờ!");
+      }
+
+      // Handle both Array and Map/Set variants across ziplayer versions
+      const tracks = Array.isArray(player.queue.tracks)
+        ? player.queue.tracks
+        : player.queue.tracks.toArray();
+
+      const totalPages = Math.ceil(tracks.length / 10) || 1;
+      const page = (interaction.options.getNumber("page") ?? 1) - 1;
+
+      if (page >= totalPages) {
+        return interaction.editReply(`⚠️ Chỉ có ${totalPages} trang danh sách chờ.`);
+      }
+
+      const current = player.currentTrack;
+      const queueStr = tracks
+        .slice(page * 10, page * 10 + 10)
+        .map(
+          (t, i) =>
+            `**${page * 10 + i + 1}.** \`[${t.duration ?? "N/A"}]\` ${t.title ?? "Unknown"} — <@${t.requestedBy?.id ?? "Unknown"}>`,
+        )
+        .join("\n");
+
+      const embed = new EmbedBuilder()
+        .setColor("Random")
+        .setDescription(
+          `🎶 **Đang phát:**\n` +
+            (current
+              ? `\`[${current.duration ?? "N/A"}]\` ${current.title ?? "Unknown"}`
+              : "Không có bài hát") +
+            `\n\n📜 **Hàng chờ:**\n${queueStr || "Trống!"}`,
+        )
+        .setFooter({ text: `Trang ${page + 1}/${totalPages}` })
+        .setThumbnail(current?.thumbnail ?? null);
+
+      await interaction.editReply({ embeds: [embed] });
+    } catch (error) {
+      console.error("Lỗi trong lệnh queue:", error);
+      await interaction.editReply("❌ Đã xảy ra lỗi khi hiển thị danh sách chờ!");
+    }
+  },
+};
+
+export default cmd;
