@@ -1,6 +1,5 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
-import { findLyricsWithAI } from "../aiService.js";
 
 // Store active live lyrics sessions - use global to share between instances
 if (!global.liveLyricsSessions) {
@@ -67,7 +66,7 @@ export default {
         { name: "⏱️ Thời lượng", value: String(track.duration || "N/A"), inline: true },
         { name: "📡 Nguồn", value: track.source || "youtube", inline: true },
         { name: "▶️ Tiến trình", value: "`0:00  advancement 0:00`" },
-        { name: "🎤 Lyrics", value: "⏳ Đang tìm lyrics bằng AI..." }
+        { name: "🎤 Lyrics", value: "⏳ Đang tải lyrics từ lyricsExt..." }
       )
       .setFooter({ text: "🎵 /livelyrics off để tắt" })
       .setTimestamp();
@@ -81,8 +80,8 @@ export default {
       embed,
       track,
       lines: [],
-      allLyrics: [],
-      currentLineIndex: 0,
+      lastLine: null,
+      plainShown: false,
       guildId
     };
     activeSessions.set(guildId, session);
@@ -102,9 +101,6 @@ export default {
         }
       } catch (e) {}
     }, 5000);
-
-    // Fetch lyrics via AI and start live display
-    fetchAndDisplayLyrics(session, track);
 
     // Auto cleanup after track ends
     const checkInterval = setInterval(async () => {
@@ -130,128 +126,62 @@ export default {
   },
 };
 
-/**
- * Strip YouTube junk from track title to get clean song name
- */
-function cleanTitle(title) {
-  if (!title) return title;
-  return title
-    // Remove everything from first | onwards (handles both | and ||)
-    .replace(/\s*\|+.*$/s, '')
-    // Remove common suffixes in parens/brackets
-    .replace(/\s*[\(\[]\s*(lyric[s]?|official|audio|video|mv|hd|4k|full|remix|cover|version|ost|feat[.\s].*|ft[.\s].*)([\)\]].*)*/gi, '')
-    // Remove trailing " - Lyric/Official/etc"
-    .replace(/\s*[-\u2013]\s*(lyric[s]?|official|audio|video|mv|hd|4k|full|ost).*$/gi, '')
-    .trim();
+function buildLyricsDisplay(lines) {
+  let display = "";
+  for (let i = 0; i < lines.length - 1; i++) {
+    display += `┃ *${lines[i]}*\n`;
+  }
+  if (lines.length > 0) {
+    display += `┃ **➤ ${lines[lines.length - 1]}**`;
+  }
+  return display || "⏳ Đang chờ lyrics...";
 }
 
-/**
- * Try to extract artist from YouTube title (e.g. "Song Name - Artist" or "Artist - Song Name")
- */
-function extractArtistFromTitle(title) {
-  // Pattern: "Song || Artist || ..."
-  const pipeMatch = title.match(/\|\|\s*([^|]+?)\s*\|\|/);
-  if (pipeMatch) return pipeMatch[1].trim();
-  // Pattern: "Song - Artist" or "Artist - Song"
-  const dashMatch = title.match(/^(.+?)\s*[-–]\s*(.+)$/);
-  if (dashMatch) return dashMatch[2].trim();
-  return "";
-}
+export function updateLiveLyricsFromExt(guildId, track, lyricsPayload) {
+  const session = activeSessions.get(guildId);
+  if (!session || !session.active) return;
+  if (!session.track) return;
 
-/**
- * Fetch lyrics from AI and start progressive display
- */
-export async function fetchAndDisplayLyrics(session, track) {
-  try {
-    const cleanedTitle = cleanTitle(track.title);
-    const artist = track.author || extractArtistFromTitle(track.title) || "";
+  const sameTrack =
+    (session.track.url && track?.url && session.track.url === track.url) ||
+    session.track.title === track?.title;
+  if (!sameTrack) return;
 
-    console.log(`🎤 Sending to AI → title: "${cleanedTitle}", artist: "${artist}"`);
+  const currentLine = lyricsPayload?.current?.trim?.() || "";
+  const plainText = lyricsPayload?.text?.trim?.() || "";
 
-    const lyrics = await findLyricsWithAI(cleanedTitle, artist);
-    
-    if (!lyrics || !session.active) {
-      if (session.active) {
-        session.embed.spliceFields(4, 1, { name: "🎤 Lyrics", value: "❌ Không tìm thấy lyrics cho bài này" });
-        await session.message.edit({ embeds: [session.embed] }).catch(() => {});
-      }
-      return;
-    }
+  if (currentLine) {
+    if (session.lastLine === currentLine) return;
+    session.lastLine = currentLine;
+    session.lines.push(currentLine);
+    if (session.lines.length > 6) session.lines.shift();
 
-    // Parse lyrics into lines (filter empty)
-    const allLines = lyrics.split("\n").filter(l => l.trim().length > 0);
-    session.allLyrics = allLines;
-    session.currentLineIndex = 0;
-    session.lines = [];
+    session.embed.spliceFields(4, 1, {
+      name: "🎤 Lyrics",
+      value: buildLyricsDisplay(session.lines),
+    });
+    session.message.edit({ embeds: [session.embed] }).catch(() => {});
+    return;
+  }
 
-    // Calculate time per line: clamp between 2s and 8s
-    const durationMs = parseDuration(track.duration);
-    const rawTimePerLine = durationMs > 0 ? Math.floor(durationMs / allLines.length) : 4000;
-    const timePerLine = Math.min(8000, Math.max(2000, rawTimePerLine));
+  if (plainText && !session.plainShown) {
+    const lines = plainText
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(0, 6);
+    if (!lines.length) return;
 
-    console.log(`🎤 Lyrics loaded: ${allLines.length} lines, ~${timePerLine}ms/line (raw: ${rawTimePerLine}ms)`);
+    session.plainShown = true;
+    session.lines = lines;
+    session.lastLine = lines[lines.length - 1];
 
-    // Helper to advance and display one line
-    const showNextLine = () => {
-      if (!session.active || session.currentLineIndex >= session.allLyrics.length) {
-        if (session.lyricsInterval) clearInterval(session.lyricsInterval);
-        return;
-      }
-
-      const currentLine = session.allLyrics[session.currentLineIndex];
-      session.lines.push(currentLine);
-      session.currentLineIndex++;
-
-      // Keep only last 6 lines visible
-      if (session.lines.length > 6) {
-        session.lines.shift();
-      }
-
-      // Build display
-      let display = "";
-      for (let i = 0; i < session.lines.length - 1; i++) {
-        display += `┃ *${session.lines[i]}*\n`;
-      }
-      if (session.lines.length > 0) {
-        display += `┃ **➤ ${session.lines[session.lines.length - 1]}**`;
-      }
-
-      session.embed.spliceFields(4, 1, { name: "🎤 Lyrics", value: display || "⏳ Đang chờ lyrics..." });
-      session.message.edit({ embeds: [session.embed] }).catch(() => {});
-    };
-
-    // Show first line immediately, then interval for subsequent lines
-    showNextLine();
-    session.lyricsInterval = setInterval(showNextLine, timePerLine);
-
-  } catch (error) {
-    console.error("❌ Error fetching lyrics:", error.message);
-    if (session.active) {
-      session.embed.spliceFields(4, 1, { name: "🎤 Lyrics", value: "❌ Lỗi khi tìm lyrics" });
-      session.message.edit({ embeds: [session.embed] }).catch(() => {});
-    }
+    session.embed.spliceFields(4, 1, {
+      name: "🎤 Lyrics",
+      value: buildLyricsDisplay(session.lines),
+    });
+    session.message.edit({ embeds: [session.embed] }).catch(() => {});
   }
 }
 
-/**
- * Parse duration string (e.g. "3:45" or "1:02:30") to milliseconds
- */
-function parseDuration(durationStr) {
-  if (!durationStr) return 0;
-  const str = String(durationStr);
-  const parts = str.split(":").map(Number);
-  if (parts.some(isNaN)) return 0;
-  
-  let seconds = 0;
-  if (parts.length === 3) {
-    seconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
-  } else if (parts.length === 2) {
-    seconds = parts[0] * 60 + parts[1];
-  } else {
-    seconds = parts[0];
-  }
-  return seconds * 1000;
-}
-
-// Always keep global reference updated so index.js hot-reload picks up latest version
-global.fetchAndDisplayLyrics = fetchAndDisplayLyrics;
+global.updateLiveLyricsFromExt = updateLiveLyricsFromExt;

@@ -24,19 +24,21 @@ import {
   SpotifyPlugin,
   // YTSRPlugin,
 } from "@ziplayer/plugin";
+import { lyricsExt } from "@ziplayer/extension";
 
-import { fetchAndDisplayLyrics } from "./slash/livelyrics.js";
+import { updateLiveLyricsFromExt } from "./slash/livelyrics.js";
 
-function callFetchAndDisplayLyrics(session, track) {
-  const fn = global.fetchAndDisplayLyrics || fetchAndDisplayLyrics;
-  fn(session, track);
+function callUpdateLiveLyricsFromExt(guildId, track, lyricsPayload) {
+  const fn = global.updateLiveLyricsFromExt || updateLiveLyricsFromExt;
+  fn(guildId, track, lyricsPayload);
 }
 
 ytbplg.getStream = new YTexec().getStream;
 
 //create Player Manager
 const playerManager = new PlayerManager({
-    plugins: [ ytbplg ], // Removed SoundCloudPlugin due to client_id issues
+  plugins: [ ytbplg ], // Removed SoundCloudPlugin due to client_id issues
+  extensions: [new lyricsExt(null, { provider: "lrclib", includeSynced: true, autoFetchOnTrackStart: true })],
 });  
 
 // ===========================================
@@ -258,8 +260,8 @@ playerManager.on("trackStart", async (player, track) => {
       
       // Reset lyrics cho bài mới
       session.lines = [];
-      session.allLyrics = [];
-      session.currentLineIndex = 0;
+      session.lastLine = null;
+      session.plainShown = false;
       session.track = track;
       
       // Tạo embed mới với thông tin bài mới
@@ -276,7 +278,7 @@ playerManager.on("trackStart", async (player, track) => {
           { name: "⏱️ Thời lượng", value: String(track.duration || "N/A"), inline: true },
           { name: "📡 Nguồn", value: track.source || "youtube", inline: true },
           { name: "▶️ Tiến trình", value: `\`${progress}\`` },
-          { name: "🎤 Lyrics", value: "⏳ Đang tìm lyrics bằng AI..." }
+          { name: "🎤 Lyrics", value: "⏳ Đang tải lyrics từ lyricsExt..." }
         )
         .setFooter({ text: `🎵 /livelyrics off để tắt` })
         .setTimestamp();
@@ -303,9 +305,6 @@ playerManager.on("trackStart", async (player, track) => {
         } catch (e) {}
       }, 5000);
       
-      // Fetch lyrics via AI cho bài mới
-      callFetchAndDisplayLyrics(session, track);
-      
       console.log(`🔄 Created new embed for: ${track.title}`);
     }
   } else {
@@ -316,6 +315,14 @@ playerManager.on("trackStart", async (player, track) => {
 
 playerManager.on("trackEnd", (player, track) => {
   console.log(`🏁 Kết thúc: ${track.title}`);
+});
+
+playerManager.on("lyricsCreate", (player, track, lyricsPayload) => {
+  callUpdateLiveLyricsFromExt(player.guildId, track, lyricsPayload);
+});
+
+playerManager.on("lyricsChange", (player, track, lyricsPayload) => {
+  callUpdateLiveLyricsFromExt(player.guildId, track, lyricsPayload);
 });
 
 playerManager.on("queueEnd", (player) => {
