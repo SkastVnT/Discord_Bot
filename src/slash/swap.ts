@@ -1,5 +1,6 @@
-import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
+import { SlashCommandBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
+import { infoEmbed, errorEmbed } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -26,8 +27,8 @@ const cmd: SlashCommand = {
     try {
       const player = getPlayer(interaction.guildId!);
 
-      if (!player || !player.queue.tracks.size) {
-        return interaction.editReply("❌ Không có bài hát nào trong hàng chờ!");
+      if (!player?.queue.tracks.size) {
+        return interaction.editReply({ embeds: [errorEmbed("Không có bài hát nào trong hàng chờ!")] });
       }
 
       const pos1 = interaction.options.getNumber("position1", true) - 1;
@@ -35,13 +36,13 @@ const cmd: SlashCommand = {
       const tracks = player.queue.tracks.toArray();
 
       if (pos1 < 0 || pos1 >= tracks.length || pos2 < 0 || pos2 >= tracks.length) {
-        return interaction.editReply(
-          `❌ Vị trí không hợp lệ! Hàng chờ có ${tracks.length} bài.`,
-        );
+        return interaction.editReply({
+          embeds: [errorEmbed(`Vị trí không hợp lệ! Hàng chờ có **${tracks.length}** bài.`)],
+        });
       }
 
       if (pos1 === pos2) {
-        return interaction.editReply("❌ Hai vị trí giống nhau!");
+        return interaction.editReply({ embeds: [errorEmbed("Hai vị trí giống nhau!")] });
       }
 
       const track1 = tracks[pos1]!;
@@ -54,18 +55,16 @@ const cmd: SlashCommand = {
       player.queue.remove(pos2);
       player.queue.insert(track1, pos2);
 
-      const embed = new EmbedBuilder()
-        .setColor("Blue")
-        .setDescription(
-          `🔄 Đã hoán đổi:\n\n` +
-            `**#${pos1 + 1}** ${track1.title}\n↕️\n` +
-            `**#${pos2 + 1}** ${track2.title}`,
-        );
-
-      await interaction.editReply({ embeds: [embed] });
+      await interaction.editReply({
+        embeds: [
+          infoEmbed(
+            `🔄 Đã hoán đổi:\n**#${pos1 + 1}** ${track1.title}\n↕️\n**#${pos2 + 1}** ${track2.title}`,
+          ),
+        ],
+      });
     } catch (error) {
       console.error("Lỗi trong lệnh swap:", error);
-      await interaction.editReply("❌ Đã xảy ra lỗi khi hoán đổi!");
+      await interaction.editReply({ embeds: [errorEmbed("Đã xảy ra lỗi khi hoán đổi!")] });
     }
   },
 };

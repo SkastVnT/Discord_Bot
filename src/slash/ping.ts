@@ -1,4 +1,5 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
+import { COLORS, errorEmbed } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -17,7 +18,7 @@ const cmd: SlashCommand = {
       const apiLatency = Math.round(client.ws.ping);
 
       const embed = new EmbedBuilder()
-        .setColor("Green")
+        .setColor(COLORS.success)
         .setTitle("🏓 Pong!")
         .addFields(
           { name: "⏱️ Bot Latency", value: `\`${botLatency}ms\``, inline: true },
@@ -29,7 +30,7 @@ const cmd: SlashCommand = {
       await interaction.editReply({ content: null, embeds: [embed] });
     } catch (error) {
       console.error("Lỗi trong lệnh ping:", error);
-      await interaction.editReply("❌ Đã xảy ra lỗi khi kiểm tra ping!");
+      await interaction.editReply({ embeds: [errorEmbed("Đã xảy ra lỗi khi kiểm tra ping!")] });
     }
   },
 };

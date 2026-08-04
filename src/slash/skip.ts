@@ -1,5 +1,6 @@
-import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
+import { SlashCommandBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
+import { buildNowPlayingEmbed, warningEmbed, errorEmbed, successEmbed } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -12,22 +13,30 @@ const cmd: SlashCommand = {
     try {
       const player = getPlayer(interaction.guildId!);
 
-      if (!player || !player.isPlaying) {
-        return interaction.editReply("❌ Không có bài hát nào để bỏ qua!");
+      if (!player?.isPlaying) {
+        return interaction.editReply({
+          embeds: [errorEmbed("Không có bài hát nào để bỏ qua!")],
+        });
       }
 
-      const current = player.currentTrack!;
+      const skipped = player.currentTrack!;
       await player.skip();
+      const next = player.currentTrack;
 
-      const embed = new EmbedBuilder()
-        .setColor("Orange")
-        .setDescription(`⏭️ Đã bỏ qua: **${current.title}**`)
-        .setThumbnail(current.thumbnail);
-
-      await interaction.editReply({ embeds: [embed] });
+      if (next) {
+        const embed = buildNowPlayingEmbed(next, player, interaction.user);
+        embed.setDescription(`⏭️ Đã bỏ qua: **${skipped.title}**`);
+        await interaction.editReply({ embeds: [embed] });
+      } else {
+        await interaction.editReply({
+          embeds: [successEmbed(`⏭️ Đã bỏ qua: **${skipped.title}**\n*Hàng chờ đã hết!*`)],
+        });
+      }
     } catch (error) {
       console.error("Lỗi trong lệnh skip:", error);
-      await interaction.editReply("❌ Đã xảy ra lỗi khi bỏ qua bài hát!");
+      await interaction.editReply({
+        embeds: [errorEmbed("Đã xảy ra lỗi khi bỏ qua bài hát!")],
+      });
     }
   },
 };

@@ -8,6 +8,7 @@ import {
 import { getPlayer, getManager } from "ziplayer";
 import { existsSync, readdirSync, statSync } from "fs";
 import { join, extname, basename } from "path";
+import { COLORS, errorEmbed } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 // Bug fix #8: use MUSIC_FOLDER env var instead of hardcoded path
@@ -129,7 +130,7 @@ const cmd: SlashCommand = {
       audioPlayer.play(resource);
 
       const embed = new EmbedBuilder()
-        .setColor(0x00ff99)
+        .setColor(COLORS.primary)
         .setTitle("🎵 Đang phát nhạc Local")
         .setDescription(`**${fileName}**`)
         .addFields(
@@ -143,9 +144,9 @@ const cmd: SlashCommand = {
       await interaction.editReply({ embeds: [embed] });
     } catch (error) {
       console.error("🚨 Lỗi phát nhạc local:", error);
-      await interaction.editReply(
-        "❌ Đã xảy ra lỗi khi phát nhạc local. Kiểm tra file có tồn tại và định dạng hợp lệ không.",
-      );
+      await interaction.editReply({
+        embeds: [errorEmbed("Đã xảy ra lỗi khi phát nhạc local. Kiểm tra file có tồn tại và định dạng hợp lệ không.")],
+      });
     }
   },
 };

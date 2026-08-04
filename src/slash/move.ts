@@ -1,5 +1,6 @@
-import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
+import { SlashCommandBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
+import { infoEmbed, errorEmbed } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -26,8 +27,8 @@ const cmd: SlashCommand = {
     try {
       const player = getPlayer(interaction.guildId!);
 
-      if (!player || !player.queue.tracks.size) {
-        return interaction.editReply("❌ Không có bài hát nào trong hàng chờ!");
+      if (!player?.queue.tracks.size) {
+        return interaction.editReply({ embeds: [errorEmbed("Không có bài hát nào trong hàng chờ!")] });
       }
 
       const from = interaction.options.getNumber("from", true) - 1;
@@ -35,13 +36,13 @@ const cmd: SlashCommand = {
       const tracks = player.queue.tracks.toArray();
 
       if (from < 0 || from >= tracks.length || to < 0 || to >= tracks.length) {
-        return interaction.editReply(
-          `❌ Vị trí không hợp lệ! Hàng chờ có ${tracks.length} bài.`,
-        );
+        return interaction.editReply({
+          embeds: [errorEmbed(`Vị trí không hợp lệ! Hàng chờ có **${tracks.length}** bài.`)],
+        });
       }
 
       if (from === to) {
-        return interaction.editReply("❌ Vị trí hiện tại và đích trùng nhau!");
+        return interaction.editReply({ embeds: [errorEmbed("Vị trí hiện tại và đích trùng nhau!")] });
       }
 
       const track = tracks[from]!;
@@ -49,17 +50,15 @@ const cmd: SlashCommand = {
       player.queue.remove(from);
       player.queue.insert(track, to);
 
-      const embed = new EmbedBuilder()
-        .setColor("Blue")
-        .setDescription(
-          `🔄 Đã di chuyển **${track.title}**\nTừ vị trí **#${from + 1}** → **#${to + 1}**`,
-        )
-        .setThumbnail(track.thumbnail);
-
-      await interaction.editReply({ embeds: [embed] });
+      await interaction.editReply({
+        embeds: [
+          infoEmbed(`🔄 Di chuyển: **${track.title}**\nTừ vị trí **#${from + 1}** → **#${to + 1}**`)
+            .setThumbnail(track.thumbnail),
+        ],
+      });
     } catch (error) {
       console.error("Lỗi trong lệnh move:", error);
-      await interaction.editReply("❌ Đã xảy ra lỗi khi di chuyển bài hát!");
+      await interaction.editReply({ embeds: [errorEmbed("Đã xảy ra lỗi khi di chuyển bài hát!")] });
     }
   },
 };

@@ -1,5 +1,6 @@
-import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
+import { SlashCommandBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
+import { successEmbed, errorEmbed, warningEmbed } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -12,8 +13,8 @@ const cmd: SlashCommand = {
     try {
       const player = getPlayer(interaction.guildId!);
 
-      if (!player || !player.queue.tracks.size) {
-        return interaction.editReply("❌ Không có bài hát nào trong hàng chờ!");
+      if (!player?.queue.tracks.size) {
+        return interaction.editReply({ embeds: [errorEmbed("Không có bài hát nào trong hàng chờ!")] });
       }
 
       const tracks = player.queue.tracks.toArray();
@@ -30,24 +31,23 @@ const cmd: SlashCommand = {
       }
 
       if (duplicates.length === 0) {
-        return interaction.editReply("✅ Không có bài hát trùng lặp!");
+        return interaction.editReply({ embeds: [warningEmbed("Không có bài hát trùng lặp!")] });
       }
 
       for (const index of duplicates) {
         player.queue.remove(index);
       }
 
-      const embed = new EmbedBuilder()
-        .setColor("Green")
-        .setDescription(
-          `🗑️ Đã xóa **${duplicates.length}** bài hát trùng lặp!\n\n` +
-            `📜 Còn lại: **${player.queue.tracks.size}** bài`,
-        );
-
-      await interaction.editReply({ embeds: [embed] });
+      await interaction.editReply({
+        embeds: [
+          successEmbed(
+            `🗑️ Đã xóa **${duplicates.length}** bài trùng lặp! Còn lại: **${player.queue.tracks.size}** bài`,
+          ),
+        ],
+      });
     } catch (error) {
       console.error("Lỗi trong lệnh removedupes:", error);
-      await interaction.editReply("❌ Đã xảy ra lỗi khi xóa bài trùng!");
+      await interaction.editReply({ embeds: [errorEmbed("Đã xảy ra lỗi khi xóa bài trùng!")] });
     }
   },
 };

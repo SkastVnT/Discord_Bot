@@ -3,13 +3,15 @@ import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { Client, Collection, Events, GatewayIntentBits, EmbedBuilder } from "discord.js";
+import { Client, Collection, Events, GatewayIntentBits, EmbedBuilder, MessageFlags } from "discord.js";
 import { REST } from "@discordjs/rest";
 import { Routes } from "discord.js";
-import { PlayerManager } from "ziplayer";
+import { PlayerManager, getPlayer } from "ziplayer";
 import { YouTubePlugin } from "@ziplayer/plugin";
 import { lyricsExt } from "@ziplayer/extension";
-import { activeSessions, updateLiveLyricsFromExt } from "./slash/livelyrics.js";
+import { buildControlRow, buildQueuePageRow, buildLyricsPageRow, buildNowPlayingEmbed, COLORS, errorEmbed } from "./utils/embeds.js";
+import { buildLyricsDisplay, buildTimedCaptionsDisplay, activeSessions, updateLiveLyricsFromExt, attemptFallbackLyrics } from "./slash/livelyrics.js";
+import { lyricsPageCache } from "./slash/lyrics.js";
 import type { SlashCommand } from "./types/command.js";
 
 dotenv.config();
@@ -179,6 +181,10 @@ fs.watch(slashFolder, { recursive: false }, async (eventType, filename) => {
 async function registerCommands(): Promise<void> {
   const rest = new REST({ version: "10" }).setToken(TOKEN!);
   try {
+    // Xóa global commands cũ (nếu trước đây đã đăng ký global)
+    await rest.put(Routes.applicationCommands(CLIENT_ID!), { body: [] });
+    console.log("🧹 Đã xóa tất cả global commands cũ.");
+
     console.log(
       `🔄 Reloading ${commands.length} slash command(s) cho ${GUILD_IDS.length} guild(s)...`,
     );
@@ -204,11 +210,113 @@ client.once(Events.ClientReady, async () => {
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
+  // ============================================
+  // 🔘 Button Interactions
+  if (interaction.isButton()) {
+    const { customId, guildId } = interaction;
+    if (!guildId) return;
+
+    // Disabled label buttons — do nothing
+    if (customId === "ctrl_queue_label" || customId === "ctrl_lyr_label") {
+      await interaction.deferUpdate();
+      return;
+    }
+
+    // Music control buttons
+    if (["ctrl_pause", "ctrl_skip", "ctrl_prev", "ctrl_stop"].includes(customId)) {
+      const player = getPlayer(guildId);
+      if (!player) {
+        await interaction.reply({ embeds: [errorEmbed("Bot không đang phát nhạc!")], flags: MessageFlags.Ephemeral });
+        return;
+      }
+      await interaction.deferUpdate();
+      try {
+        if (customId === "ctrl_pause") {
+          if (player.isPaused) player.resume(); else player.pause();
+        } else if (customId === "ctrl_skip") {
+          await player.skip();
+        } else if (customId === "ctrl_prev") {
+          await player.previous();
+        } else if (customId === "ctrl_stop") {
+          player.stop();
+          player.queue.clear();
+          await interaction.editReply({
+            embeds: [new EmbedBuilder().setColor(COLORS.neutral).setDescription("\u23f9\ufe0f \u0110\u00e3 d\u1eebng ph\u00e1t nh\u1ea1c.")],
+            components: [],
+          });
+          return;
+        }
+        const newRow = buildControlRow(player.isPaused, !!player.previousTrack);
+        const session = activeSessions.get(guildId);
+        if (session) session.controlRow = newRow;
+        await interaction.editReply({ components: [newRow] });
+      } catch (err) {
+        console.error(`Button error [${customId}]:`, err);
+      }
+      return;
+    }
+
+    // Queue page buttons: ctrl_queue_N
+    if (customId.startsWith("ctrl_queue_")) {
+      const page = parseInt(customId.replace("ctrl_queue_", ""), 10);
+      if (isNaN(page)) return;
+      const player = getPlayer(guildId);
+      if (!player) {
+        await interaction.reply({ embeds: [errorEmbed("Bot không đang phát nhạc!")], flags: MessageFlags.Ephemeral });
+        return;
+      }
+      await interaction.deferUpdate();
+      const tracks = player.queue.tracks.toArray();
+      const totalPages = Math.ceil(tracks.length / 10) || 1;
+      if (page < 0 || page >= totalPages) return;
+      const current = player.currentTrack;
+      const queueStr = tracks
+        .slice(page * 10, page * 10 + 10)
+        .map((t, i) => `**${page * 10 + i + 1}.** \`[${t.duration ?? "N/A"}]\` ${t.title}`)
+        .join("\n");
+      const queueEmbed = new EmbedBuilder()
+        .setColor(COLORS.queue)
+        .setTitle(`\ud83d\udcdc H\u00e0ng ch\u1edd \u2014 Trang ${page + 1}/${totalPages}`)
+        .setDescription(
+          `\ud83c\udfb6 **\u0110ang ph\u00e1t:** ${current ? `\`[${current.duration ?? "N/A"}]\` ${current.title}` : "*Kh\u00f4ng c\u00f3*"}\n\n${queueStr || "*Tr\u1ed1ng!*"}`,
+        )
+        .setThumbnail(current?.thumbnail ?? null)
+        .setFooter({ text: `${tracks.length} b\u00e0i trong h\u00e0ng ch\u1edd` });
+      await interaction.editReply({ embeds: [queueEmbed], components: [buildQueuePageRow(page, totalPages)] });
+      return;
+    }
+
+    // Lyrics page buttons: ctrl_lyr_N
+    if (customId.startsWith("ctrl_lyr_")) {
+      const page = parseInt(customId.replace("ctrl_lyr_", ""), 10);
+      if (isNaN(page)) return;
+      const cached = lyricsPageCache.get(interaction.message.id);
+      if (!cached || Date.now() > cached.expires) {
+        await interaction.reply({ embeds: [errorEmbed("Lyrics đã hết hạn. Chạy lại /lyrics để xem.")], flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const { pages, trackName } = cached;
+      if (page < 0 || page >= pages.length) return;
+      await interaction.deferUpdate();
+      const lyrEmbed = new EmbedBuilder()
+        .setColor(COLORS.lyrics)
+        .setTitle(`\ud83c\udfa4 ${trackName}`)
+        .setDescription(pages[page]!)
+        .setFooter({ text: `\ud83d\udcc4 Trang ${page + 1}/${pages.length} \u2022 Powered by lrclib` })
+        .setTimestamp();
+      await interaction.editReply({ embeds: [lyrEmbed], components: [buildLyricsPageRow(page, pages.length)] });
+      return;
+    }
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
 
   const slashcmd = client.slashcommands.get(interaction.commandName);
   if (!slashcmd) {
-    await interaction.reply({ content: "Không tìm thấy lệnh này!", ephemeral: true });
+    try {
+      await interaction.reply({ content: "Không tìm thấy lệnh này!", flags: MessageFlags.Ephemeral });
+    } catch { /* interaction expired or already replied */ }
     return;
   }
 
@@ -221,7 +329,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.deferred || interaction.replied) {
         await interaction.editReply({ content: "Đã xảy ra lỗi khi chạy lệnh!" });
       } else {
-        await interaction.reply({ content: "Đã xảy ra lỗi khi chạy lệnh!", ephemeral: true });
+        await interaction.reply({ content: "Đã xảy ra lỗi khi chạy lệnh!", flags: MessageFlags.Ephemeral });
       }
     } catch {
       // Secondary reply failed — interaction may have timed out
@@ -249,58 +357,52 @@ playerManager.on("trackStart", async (player, track) => {
     if (session.lyricsInterval) clearInterval(session.lyricsInterval);
 
     session.lines = [];
+    session.timedLines = undefined;
     session.lastLine = null;
     session.plainShown = false;
     session.track = track;
+    session.createdAt = Date.now();
+    session.lyricsAttempted = false;
 
-    const progress =
-      player.getProgressBar?.({ timecodes: true, length: 15 }) ?? "0:00  ─────── 0:00";
-
-    const newEmbed = new EmbedBuilder()
-      .setColor("#FF6B6B")
-      .setTitle(`🎶 ${track.title}`)
-      .setURL(track.url)
-      .setThumbnail(track.thumbnail)
-      .addFields(
-        { name: "👤 Ca sĩ", value: track.author || "Không rõ", inline: true },
-        { name: "⏱️ Thời lượng", value: String(track.duration ?? "N/A"), inline: true },
-        { name: "📡 Nguồn", value: track.source ?? "youtube", inline: true },
-        { name: "▶️ Tiến trình", value: `\`${progress}\`` },
-        { name: "🎤 Lyrics", value: "⏳ Đang tải lyrics từ lyricsExt..." },
-      )
-      .setFooter({ text: "🎵 /livelyrics off để tắt" })
-      .setTimestamp();
-
-    const newMessage = await channel.send({ embeds: [newEmbed] });
+    const newEmbed = buildNowPlayingEmbed(track, player);
+    newEmbed.addFields({ name: "\ud83c\udfa4 Lyrics", value: "\u23f3 \u0110ang t\u1ea3i lyrics t\u1eeb lyricsExt..." });
+    newEmbed.setFooter({ text: "\ud83c\udfb5 /livelyrics off \u0111\u1ec3 t\u1eaft" });
+    const controlRow = buildControlRow(player.isPaused, !!player.previousTrack);
+    session.controlRow = controlRow;
+    const newMessage = await channel.send({ embeds: [newEmbed], components: [controlRow] });
     session.embed = newEmbed;
     session.message = newMessage;
 
     session.progressInterval = setInterval(async () => {
       try {
-        const { getPlayer } = await import("ziplayer");
         const currentPlayer = getPlayer(guildId);
         if (!currentPlayer?.isPlaying) {
           clearInterval(session.progressInterval);
           return;
         }
-        const newProgress =
-          currentPlayer.getProgressBar?.({ timecodes: true, length: 15 }) ?? "";
-        if (newProgress) {
-          session.embed.spliceFields(3, 1, {
-            name: "▶️ Tiến trình",
-            value: `\`${newProgress}\``,
-          });
-          await session.message.edit({ embeds: [session.embed] }).catch(() => {});
+        const freshEmbed = buildNowPlayingEmbed(session.track, currentPlayer);
+        const timedOut = Date.now() - session.createdAt > 12000;
+        const isSearching = timedOut && !session.lyricsAttempted && session.lines.length === 0;
+        if (timedOut && !session.lyricsAttempted) {
+          attemptFallbackLyrics(session).catch(() => {});
         }
+        const lyricsValue = session.timedLines?.length && currentPlayer.position !== undefined
+          ? buildTimedCaptionsDisplay(session.timedLines, currentPlayer.position)
+          : buildLyricsDisplay(session.lines, timedOut, isSearching);
+        freshEmbed.addFields({ name: "🎤 Lyrics", value: lyricsValue });
+        freshEmbed.setFooter({ text: "🎵 /livelyrics off để tắt" });
+        const freshRow = buildControlRow(currentPlayer.isPaused, !!currentPlayer.previousTrack);
+        session.controlRow = freshRow;
+        await session.message.edit({ embeds: [freshEmbed], components: [freshRow] }).catch(() => {});
+        session.embed = freshEmbed;
       } catch {
         // ignore
       }
     }, 5000);
 
     console.log(`🔄 Created new embed for: ${track.title}`);
-  } else {
-    channel?.send(`🎶 Đang phát: **${track.title}**`).catch(() => {});
   }
+  // NOTE: no else branch — play.ts always creates the initial session embed
 });
 
 playerManager.on("trackEnd", (_player, track) => {
@@ -329,10 +431,10 @@ playerManager.on("queueEnd", (player) => {
     if (session.progressInterval) clearInterval(session.progressInterval);
     if (session.lyricsInterval) clearInterval(session.lyricsInterval);
     session.active = false;
-    session.embed
-      .setColor("#888888")
-      .spliceFields(4, 1, { name: "🎤 Lyrics", value: "⏹️ Đã dừng phát" });
-    session.message.edit({ embeds: [session.embed] }).catch(() => {});
+    const stoppedEmbed = new EmbedBuilder()
+      .setColor(COLORS.neutral)
+      .setDescription("\u23f9\ufe0f \u0110\u00e3 ph\u00e1t h\u1ebft nh\u1ea1c trong h\u00e0ng ch\u1edd.");
+    session.message.edit({ embeds: [stoppedEmbed], components: [] }).catch(() => {});
     activeSessions.delete(guildId);
   }
 });
@@ -356,4 +458,5 @@ playerManager.on("playerDestroy", (player) => {
 });
 
 // ===========================================
+client.on("error", (err) => console.error("❌ Discord client error:", err));
 client.login(TOKEN);

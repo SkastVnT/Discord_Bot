@@ -1,5 +1,6 @@
-import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
+import { SlashCommandBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
+import { successEmbed, errorEmbed } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -12,23 +13,23 @@ const cmd: SlashCommand = {
     try {
       const player = getPlayer(interaction.guildId!);
 
-      if (!player || !player.isPlaying) {
-        return interaction.editReply("❌ Không có bài hát nào đang phát!");
+      if (!player?.isPlaying) {
+        return interaction.editReply({ embeds: [errorEmbed("Không có bài hát nào đang phát!")] });
       }
 
       const track = player.currentTrack!;
 
       await player.seek(0);
 
-      const embed = new EmbedBuilder()
-        .setColor("Green")
-        .setDescription(`🔁 Đang phát lại: **${track.title}**`)
-        .setThumbnail(track.thumbnail);
-
-      await interaction.editReply({ embeds: [embed] });
+      await interaction.editReply({
+        embeds: [
+          successEmbed(`🔁 Đang phát lại: **${track.title}**`)
+            .setThumbnail(track.thumbnail),
+        ],
+      });
     } catch (error) {
       console.error("Lỗi trong lệnh replay:", error);
-      await interaction.editReply("❌ Đã xảy ra lỗi khi phát lại bài hát!");
+      await interaction.editReply({ embeds: [errorEmbed("Đã xảy ra lỗi khi phát lại bài hát!")] });
     }
   },
 };

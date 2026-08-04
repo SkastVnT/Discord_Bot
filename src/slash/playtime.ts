@@ -1,5 +1,6 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
+import { COLORS, errorEmbed } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 // Bug fix #13: added null guard in parseDuration
@@ -26,7 +27,7 @@ const cmd: SlashCommand = {
       const player = getPlayer(interaction.guildId!);
 
       if (!player) {
-        return interaction.editReply("❌ Không có player nào đang hoạt động!");
+        return interaction.editReply({ embeds: [errorEmbed("Không có player nào đang hoạt động!")] });
       }
 
       const history = player.history?.tracks?.toArray() ?? [];
@@ -45,7 +46,7 @@ const cmd: SlashCommand = {
       const seconds = Math.floor((totalMs % 60000) / 1000);
 
       const embed = new EmbedBuilder()
-        .setColor("Blue")
+        .setColor(COLORS.info)
         .setTitle("⏱️ Thống kê thời gian phát nhạc")
         .addFields(
           {
@@ -70,7 +71,7 @@ const cmd: SlashCommand = {
       await interaction.editReply({ embeds: [embed] });
     } catch (error) {
       console.error("Lỗi trong lệnh playtime:", error);
-      await interaction.editReply("❌ Đã xảy ra lỗi khi tính thời gian!");
+      await interaction.editReply({ embeds: [errorEmbed("Đã xảy ra lỗi khi tính thời gian!")] });
     }
   },
 };

@@ -1,7 +1,14 @@
 import { SlashCommandBuilder, EmbedBuilder, type GuildMember, type Message } from "discord.js";
 import { getManager, getPlayer } from "ziplayer";
-import { activeSessions } from "./livelyrics.js";
+import { activeSessions, buildLyricsDisplay, buildTimedCaptionsDisplay, attemptFallbackLyrics } from "./livelyrics.js";
 import type { LiveLyricsSession } from "./livelyrics.js";
+import {
+  buildNowPlayingEmbed,
+  buildControlRow,
+  sourceColor,
+  sourceLabel,
+  formatDuration,
+} from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 function extractYouTubeVideoId(input: string): string | null {
@@ -38,9 +45,31 @@ function buildYouTubeSearchCandidates(query: string): string[] {
 
   if (!candidates.includes(canonicalUrl)) candidates.push(canonicalUrl);
   if (!candidates.includes(shortUrl)) candidates.push(shortUrl);
-  if (!candidates.includes(videoId)) candidates.push(videoId);
+  // NOTE: bare video ID intentionally NOT added — treated as text search by Lavalink → wrong song
 
   return candidates;
+}
+
+function isYouTubeUrl(query: string): boolean {
+  try {
+    const host = new URL(query).hostname.toLowerCase();
+    return host === "youtu.be" || host.includes("youtube.com");
+  } catch {
+    return false;
+  }
+}
+
+async function fetchYouTubeTitle(videoId: string): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://www.youtube.com/oembed?url=https://youtu.be/${encodeURIComponent(videoId)}&format=json`,
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as { title?: string };
+    return data.title ?? null;
+  } catch {
+    return null;
+  }
 }
 
 async function searchWithFallback(
@@ -50,6 +79,7 @@ async function searchWithFallback(
 ) {
   if (!player) return null;
   const candidates = buildYouTubeSearchCandidates(query);
+  const videoId = extractYouTubeVideoId(query);
   let lastError: unknown = null;
 
   for (const candidate of candidates) {
@@ -65,6 +95,25 @@ async function searchWithFallback(
         `[play] Search candidate failed: ${candidate} -> ${(err as Error).message}`,
       );
     }
+  }
+
+  // Tất cả URL forms đều fail → thử fetch title qua oEmbed rồi search theo tên
+  if (videoId) {
+    console.log(`[play] All URL variants failed, fetching title via oEmbed for: ${videoId}`);
+    const title = await fetchYouTubeTitle(videoId);
+    if (title) {
+      console.log(`[play] oEmbed title: "${title}", searching by title...`);
+      try {
+        const result = await player.search(title, requestedBy);
+        if (result?.tracks?.length) return result;
+      } catch (err) {
+        console.log(`[play] Title search also failed: ${(err as Error).message}`);
+      }
+    } else {
+      console.log(`[play] oEmbed returned no title (invalid video ID or network error)`);
+    }
+    // oEmbed did not help → throw a user-friendly error instead of raw Lavalink error
+    throw new Error("YOUTUBE_URL_FAILED");
   }
 
   if (lastError) throw lastError;
@@ -137,7 +186,7 @@ const cmd: SlashCommand = {
         return interaction.editReply("❌ Không tìm thấy kết quả nào!");
       }
 
-      const embed = new EmbedBuilder().setColor(0x00ff99);
+      const embed = new EmbedBuilder();
 
       if (result.playlist && result.tracks.length > 1) {
         const firstTrack = result.tracks[0]!;
@@ -153,14 +202,17 @@ const cmd: SlashCommand = {
         }
 
         embed
+          .setColor(0x1db954)
           .setTitle("📀 Playlist đã thêm vào hàng chờ")
           .setDescription(
             `**[${result.playlist.title ?? "Mix Playlist"}](${result.playlist.url ?? query})**`,
           )
           .setThumbnail(result.playlist.thumbnail ?? firstTrack.thumbnail)
-          .setFooter({
-            text: `${result.tracks.length} bài hát | Yêu cầu bởi ${interaction.user.tag}`,
-          });
+          .addFields(
+            { name: "🎵 Số bài", value: `${result.tracks.length} bài`, inline: true },
+            { name: "👤 Ca sĩ đầu tiên", value: firstTrack.author || "Unknown", inline: true },
+          )
+          .setFooter({ text: `Yêu cầu bởi ${interaction.user.tag}` });
       } else {
         const track = result.tracks[0]!;
 
@@ -171,10 +223,16 @@ const cmd: SlashCommand = {
         }
 
         embed
+          .setColor(sourceColor(track.source))
           .setTitle("🎶 Đã thêm vào hàng chờ")
           .setDescription(`**[${track.title}](${track.url})**`)
           .setThumbnail(track.thumbnail)
-          .setFooter({ text: `⏱️ ${track.duration} | 👤 ${track.author}` });
+          .addFields(
+            { name: "⏱️ Thời lượng", value: formatDuration(track.duration), inline: true },
+            { name: "👤 Ca sĩ", value: track.author || "Unknown", inline: true },
+            { name: "📡 Nguồn", value: sourceLabel(track.source), inline: true },
+          )
+          .setFooter({ text: `Yêu cầu bởi ${interaction.user.tag}` });
       }
 
       await interaction.editReply({ embeds: [embed] });
@@ -183,26 +241,14 @@ const cmd: SlashCommand = {
       const guildId = interaction.guildId!;
       if (!activeSessions.has(guildId) && interaction.channel) {
         const track = result.tracks[0]!;
-        const progress =
-          player.getProgressBar?.({ timecodes: true, length: 15 }) ?? "▶️ 0:00  ─────── 0:00";
-
-        const combinedEmbed = new EmbedBuilder()
-          .setColor("#FF6B6B")
-          .setTitle(`🎶 ${track.title}`)
-          .setURL(track.url)
-          .setThumbnail(track.thumbnail)
-          .addFields(
-            { name: "👤 Ca sĩ", value: track.author || "Không rõ", inline: true },
-            { name: "⏱️ Thời lượng", value: String(track.duration ?? "N/A"), inline: true },
-            { name: "📡 Nguồn", value: track.source ?? "youtube", inline: true },
-          )
-          .addFields({ name: "▶️ Tiến trình", value: `\`${progress}\`` })
-          .addFields({ name: "🎤 Lyrics", value: "⏳ Đang tải lyrics từ lyricsExt..." })
-          .setFooter({ text: `🧍 ${interaction.user.tag} | /livelyrics off để tắt` })
-          .setTimestamp();
+        const controlRow = buildControlRow(player.isPaused, !!player.previousTrack);
+        const combinedEmbed = buildNowPlayingEmbed(track, player, interaction.user);
+        combinedEmbed.addFields({ name: "🎤 Lyrics", value: "⏳ Đang tải lyrics..." });
+        combinedEmbed.setFooter({ text: "🎵 /livelyrics off để tắt" });
 
         const combinedMsg = (await (interaction.channel as import("discord.js").GuildTextBasedChannel).send({
           embeds: [combinedEmbed],
+          components: [controlRow],
         })) as Message;
 
         const session: LiveLyricsSession = {
@@ -214,6 +260,9 @@ const cmd: SlashCommand = {
           lastLine: null,
           plainShown: false,
           guildId,
+          controlRow,
+          createdAt: Date.now(),
+          lyricsAttempted: false,
         };
 
         session.progressInterval = setInterval(async () => {
@@ -223,15 +272,20 @@ const cmd: SlashCommand = {
               clearInterval(session.progressInterval);
               return;
             }
-            const newProgress =
-              currentPlayer.getProgressBar?.({ timecodes: true, length: 15 }) ?? "";
-            if (newProgress) {
-              session.embed.spliceFields(3, 1, {
-                name: "▶️ Tiến trình",
-                value: `\`${newProgress}\``,
-              });
-              await session.message.edit({ embeds: [session.embed] }).catch(() => {});
+            const freshEmbed = buildNowPlayingEmbed(session.track, currentPlayer);
+            const timedOut = Date.now() - session.createdAt > 12000;
+            const isSearching = timedOut && !session.lyricsAttempted && session.lines.length === 0;
+            if (timedOut && !session.lyricsAttempted) {
+              attemptFallbackLyrics(session).catch(() => {});
             }
+            const lyricsValue = session.timedLines?.length && currentPlayer.position !== undefined
+              ? buildTimedCaptionsDisplay(session.timedLines, currentPlayer.position)
+              : buildLyricsDisplay(session.lines, timedOut, isSearching);
+            freshEmbed.addFields({ name: "🎤 Lyrics", value: lyricsValue });
+            freshEmbed.setFooter({ text: "🎵 /livelyrics off để tắt" });
+            session.embed = freshEmbed;
+            const components = session.controlRow ? [session.controlRow] : [];
+            await session.message.edit({ embeds: [freshEmbed], components }).catch(() => {});
           } catch {
             // ignore
           }
@@ -241,9 +295,16 @@ const cmd: SlashCommand = {
         console.log(`🎤 Auto Live Info+Lyrics enabled for guild: ${guildId}`);
       }
     } catch (err) {
-      // Bug fix #6: do not expose err.message to users
-      console.error("🚨 Lỗi phát nhạc:", err);
-      await interaction.editReply("❌ Đã xảy ra lỗi khi phát nhạc. Vui lòng thử lại!");
+      const isUserError = (err as Error).message === "YOUTUBE_URL_FAILED";
+      if (isUserError) {
+        console.warn("⚠️ URL YouTube không hợp lệ:", (err as Error).message);
+      } else {
+        console.error("🚨 Lỗi phát nhạc:", err);
+      }
+      const msg = isUserError
+        ? "❌ Không thể phát URL YouTube này.\n💡 Kiểm tra lại link hoặc thử **tìm theo tên bài** thay vì dán link."
+        : "❌ Đã xảy ra lỗi khi phát nhạc. Vui lòng thử lại!";
+      await interaction.editReply(msg);
     }
   },
 };

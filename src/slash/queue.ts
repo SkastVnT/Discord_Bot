@@ -1,9 +1,9 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
+import { COLORS, buildQueuePageRow, errorEmbed, warningEmbed } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
-// Bug fix #2: removed dead code block after try/catch that used old API
-// (interaction.channel.send, player.playing, manager.players.get — all unreachable)
+const PAGE_SIZE = 10;
 
 const cmd: SlashCommand = {
   data: new SlashCommandBuilder()
@@ -14,55 +14,58 @@ const cmd: SlashCommand = {
     ),
 
   async run({ client: _client, interaction }) {
+    await interaction.deferReply();
     try {
-      await interaction.deferReply();
-
       const player = getPlayer(interaction.guildId!);
-      if (!player || !player.isPlaying) {
-        return interaction.editReply("❌ Không có bài hát nào trong danh sách chờ!");
+
+      if (!player?.isPlaying) {
+        return interaction.editReply({
+          embeds: [errorEmbed("Không có bài hát nào trong danh sách chờ!")],
+        });
       }
 
       if (!player.queue?.tracks) {
-        return interaction.editReply("❌ Không thể truy cập hàng chờ!");
+        return interaction.editReply({
+          embeds: [errorEmbed("Không thể truy cập hàng chờ!")],
+        });
       }
 
-      // Handle both Array and Map/Set variants across ziplayer versions
-      const tracks = Array.isArray(player.queue.tracks)
-        ? player.queue.tracks
-        : player.queue.tracks.toArray();
-
-      const totalPages = Math.ceil(tracks.length / 10) || 1;
+      const tracks = player.queue.tracks.toArray();
+      const totalPages = Math.ceil(tracks.length / PAGE_SIZE) || 1;
       const page = (interaction.options.getNumber("page") ?? 1) - 1;
 
       if (page >= totalPages) {
-        return interaction.editReply(`⚠️ Chỉ có ${totalPages} trang danh sách chờ.`);
+        return interaction.editReply({
+          embeds: [warningEmbed(`Chỉ có **${totalPages}** trang danh sách chờ.`)],
+        });
       }
 
       const current = player.currentTrack;
       const queueStr = tracks
-        .slice(page * 10, page * 10 + 10)
+        .slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE)
         .map(
           (t, i) =>
-            `**${page * 10 + i + 1}.** \`[${t.duration ?? "N/A"}]\` ${t.title ?? "Unknown"} — <@${t.requestedBy?.id ?? "Unknown"}>`,
+            `**${page * PAGE_SIZE + i + 1}.** \`[${t.duration ?? "N/A"}]\` ${t.title ?? "Unknown"}`,
         )
         .join("\n");
 
       const embed = new EmbedBuilder()
-        .setColor("Random")
+        .setColor(COLORS.queue)
+        .setTitle(`📜 Hàng chờ — Trang ${page + 1}/${totalPages}`)
         .setDescription(
-          `🎶 **Đang phát:**\n` +
-            (current
-              ? `\`[${current.duration ?? "N/A"}]\` ${current.title ?? "Unknown"}`
-              : "Không có bài hát") +
-            `\n\n📜 **Hàng chờ:**\n${queueStr || "Trống!"}`,
+          `🎶 **Đang phát:** ${current ? `\`[${current.duration ?? "N/A"}]\` ${current.title ?? "Unknown"}` : "*Không có*"}\n\n` +
+            `${queueStr || "*Trống!*"}`,
         )
-        .setFooter({ text: `Trang ${page + 1}/${totalPages}` })
-        .setThumbnail(current?.thumbnail ?? null);
+        .setThumbnail(current?.thumbnail ?? null)
+        .setFooter({ text: `${tracks.length} bài trong hàng chờ` });
 
-      await interaction.editReply({ embeds: [embed] });
+      const components = totalPages > 1 ? [buildQueuePageRow(page, totalPages)] : [];
+      await interaction.editReply({ embeds: [embed], components });
     } catch (error) {
       console.error("Lỗi trong lệnh queue:", error);
-      await interaction.editReply("❌ Đã xảy ra lỗi khi hiển thị danh sách chờ!");
+      await interaction.editReply({
+        embeds: [errorEmbed("Đã xảy ra lỗi khi hiển thị danh sách chờ!")],
+      });
     }
   },
 };

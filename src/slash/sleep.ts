@@ -1,5 +1,6 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
+import { COLORS, warningEmbed, errorEmbed } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 // Bug fix #10: stale closure — getPlayer(guildId) called inside setTimeout callback
@@ -26,7 +27,7 @@ const cmd: SlashCommand = {
       const player = getPlayer(interaction.guildId!);
 
       if (!player) {
-        return interaction.editReply("❌ Không có player nào đang hoạt động!");
+        return interaction.editReply({ embeds: [errorEmbed("Không có player nào đang hoạt động!")] });
       }
 
       const minutes = interaction.options.getNumber("minutes", true);
@@ -38,10 +39,7 @@ const cmd: SlashCommand = {
       }
 
       if (minutes === 0) {
-        const embed = new EmbedBuilder()
-          .setColor(0x808080)
-          .setDescription("⏰ Đã hủy hẹn giờ tắt nhạc");
-        return interaction.editReply({ embeds: [embed] });
+        return interaction.editReply({ embeds: [warningEmbed("⏰ Đã hủy hẹn giờ tắt nhạc!")] });
       }
 
       // Bug fix #10: capture guildId (not player) so we resolve a fresh player
@@ -60,7 +58,7 @@ const cmd: SlashCommand = {
       sleepTimers.set(guildId, timer);
 
       const embed = new EmbedBuilder()
-        .setColor("Blue")
+        .setColor(COLORS.info)
         .setDescription(
           `⏰ Đã đặt hẹn giờ: Bot sẽ tắt sau **${minutes} phút**\n\n💡 *Dùng /sleep 0 để hủy*`,
         )
@@ -71,7 +69,7 @@ const cmd: SlashCommand = {
       await interaction.editReply({ embeds: [embed] });
     } catch (error) {
       console.error("Lỗi trong lệnh sleep:", error);
-      await interaction.editReply("❌ Đã xảy ra lỗi khi đặt hẹn giờ!");
+      await interaction.editReply({ embeds: [errorEmbed("Đã xảy ra lỗi khi đặt hẹn giờ!")] });
     }
   },
 };

@@ -1,6 +1,7 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import { existsSync, readdirSync, statSync } from "fs";
 import { join, extname, basename } from "path";
+import { COLORS, errorEmbed } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 // Bug fix #8: use MUSIC_FOLDER env var instead of hardcoded path
@@ -22,9 +23,9 @@ const cmd: SlashCommand = {
 
     const MUSIC_FOLDER = process.env.MUSIC_FOLDER ?? "";
     if (!MUSIC_FOLDER || !existsSync(MUSIC_FOLDER)) {
-      return interaction.editReply(
-        `❌ Folder không tồn tại hoặc chưa được cấu hình!\n💡 Thêm \`MUSIC_FOLDER=...\` vào file .env`,
-      );
+      return interaction.editReply({
+        embeds: [errorEmbed("Folder không tồn tại hoặc chưa được cấu hình!\n💡 Thêm `MUSIC_FOLDER=...` vào file .env")],
+      });
     }
 
     const supportedFormats = [".mp3", ".wav", ".ogg", ".m4a", ".flac", ".opus"];
@@ -39,9 +40,9 @@ const cmd: SlashCommand = {
       .sort();
 
     if (files.length === 0) {
-      return interaction.editReply(
-        `❌ Không có file nhạc trong folder!\n📁 Folder: \`${MUSIC_FOLDER}\`\n🎵 Hỗ trợ: ${supportedFormats.join(", ")}`,
-      );
+      return interaction.editReply({
+        embeds: [errorEmbed(`Không có file nhạc trong folder!\n📁 Folder: \`${MUSIC_FOLDER}\`\n🎵 Hỗ trợ: ${supportedFormats.join(", ")}`)],
+      });
     }
 
     const page = interaction.options.getInteger("page") ?? 1;
@@ -51,9 +52,9 @@ const cmd: SlashCommand = {
     const endIndex = Math.min(startIndex + itemsPerPage, files.length);
 
     if (page > totalPages) {
-      return interaction.editReply(
-        `❌ Trang ${page} không tồn tại! Chỉ có ${totalPages} trang.`,
-      );
+      return interaction.editReply({
+        embeds: [errorEmbed(`Trang ${page} không tồn tại! Chỉ có **${totalPages}** trang.`)],
+      });
     }
 
     const pageFiles = files.slice(startIndex, endIndex);
@@ -67,7 +68,7 @@ const cmd: SlashCommand = {
       .join("\n");
 
     const embed = new EmbedBuilder()
-      .setColor(0x00ff99)
+      .setColor(COLORS.queue)
       .setTitle("📂 Danh sách nhạc Local")
       .setDescription(
         `📁 **Folder:** \`${MUSIC_FOLDER}\`\n🎵 **Tổng cộng:** ${files.length} bài\n\n${fileList}`,

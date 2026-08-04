@@ -52,6 +52,8 @@ declare module "ziplayer" {
     node?: unknown;
     userdata: { channel?: GuildTextBasedChannel | null };
 
+    previousTrack?: Track | null;
+
     connect(channel: VoiceBasedChannel): Promise<void>;
     disconnect(): Promise<void>;
     play(track: Track): Promise<void>;
@@ -130,15 +132,24 @@ declare module "@ziplayer/plugin" {
 }
 
 declare module "@ziplayer/extension" {
+  export interface LyricsResult {
+    text?: string;
+    syncedLyrics?: string;
+    trackName?: string;
+    artistName?: string;
+    albumName?: string;
+  }
+
   export class lyricsExt {
     constructor(
-      param: null,
+      param?: null,
       options?: {
         provider?: string;
         includeSynced?: boolean;
         autoFetchOnTrackStart?: boolean;
       },
     );
+    fetch(options: { title: string; artist?: string }): Promise<LyricsResult>;
   }
 }
 
