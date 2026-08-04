@@ -8,7 +8,7 @@ import {
 import { getPlayer } from "ziplayer";
 import type { Player } from "ziplayer";
 import { ensurePlayer, ensureConnected } from "../utils/player.js";
-import { activeSessions, buildLyricsDisplay, buildTimedCaptionsDisplay, attemptFallbackLyrics } from "./livelyrics.js";
+import { activeSessions, attemptFallbackLyrics, renderLyricsField, shouldAttemptFallback } from "./livelyrics.js";
 import type { LiveLyricsSession } from "./livelyrics.js";
 import {
   buildNowPlayingEmbed,
@@ -320,15 +320,10 @@ const cmd: SlashCommand = {
               return;
             }
             const freshEmbed = buildNowPlayingEmbed(session.track, currentPlayer);
-            const timedOut = Date.now() - session.createdAt > 12000;
-            const isSearching = timedOut && !session.lyricsAttempted && session.lines.length === 0;
-            if (timedOut && !session.lyricsAttempted) {
+            if (shouldAttemptFallback(session)) {
               attemptFallbackLyrics(session).catch(() => {});
             }
-            const lyricsValue = session.timedLines?.length
-              ? buildTimedCaptionsDisplay(session.timedLines, currentPlayer.getTime().current)
-              : buildLyricsDisplay(session.lines, timedOut, isSearching);
-            freshEmbed.addFields({ name: "🎤 Lyrics", value: lyricsValue });
+            freshEmbed.addFields({ name: "🎤 Lyrics", value: renderLyricsField(session, currentPlayer) });
             freshEmbed.setFooter({ text: "🎵 /livelyrics off để tắt" });
             session.embed = freshEmbed;
             const components = session.controlRow ? [session.controlRow] : [];

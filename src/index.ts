@@ -10,7 +10,7 @@ import { PlayerManager, getPlayer } from "ziplayer";
 import { YouTubePlugin } from "@ziplayer/plugin";
 import { YTexec } from "@ziplayer/ytexecplug";
 import { buildControlRow, buildQueuePageRow, buildLyricsPageRow, buildNowPlayingEmbed, COLORS, errorEmbed, formatDuration } from "./utils/embeds.js";
-import { buildLyricsDisplay, buildTimedCaptionsDisplay, activeSessions, updateLiveLyricsFromExt, attemptFallbackLyrics } from "./slash/livelyrics.js";
+import { activeSessions, updateLiveLyricsFromExt, attemptFallbackLyrics, renderLyricsField, shouldAttemptFallback } from "./slash/livelyrics.js";
 import { lyricsPageCache } from "./slash/lyrics.js";
 import type { SlashCommand } from "./types/command.js";
 
@@ -381,15 +381,10 @@ playerManager.on("trackStart", async (player, track) => {
           return;
         }
         const freshEmbed = buildNowPlayingEmbed(session.track, currentPlayer);
-        const timedOut = Date.now() - session.createdAt > 12000;
-        const isSearching = timedOut && !session.lyricsAttempted && session.lines.length === 0;
-        if (timedOut && !session.lyricsAttempted) {
+        if (shouldAttemptFallback(session)) {
           attemptFallbackLyrics(session).catch(() => {});
         }
-        const lyricsValue = session.timedLines?.length
-          ? buildTimedCaptionsDisplay(session.timedLines, currentPlayer.getTime().current)
-          : buildLyricsDisplay(session.lines, timedOut, isSearching);
-        freshEmbed.addFields({ name: "🎤 Lyrics", value: lyricsValue });
+        freshEmbed.addFields({ name: "🎤 Lyrics", value: renderLyricsField(session, currentPlayer) });
         freshEmbed.setFooter({ text: "🎵 /livelyrics off để tắt" });
         const freshRow = buildControlRow(currentPlayer.isPaused, !!currentPlayer.previousTrack);
         session.controlRow = freshRow;

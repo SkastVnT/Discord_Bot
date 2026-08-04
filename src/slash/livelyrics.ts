@@ -69,6 +69,9 @@ export interface LiveLyricsSession {
 
 export const activeSessions = new Map<string, LiveLyricsSession>();
 
+/** Chờ lyricsExt bao lâu trước khi thử nguồn phụ. */
+const LYRICS_WAIT_MS = 12_000;
+
 // --------------- Fallback lyrics helpers ---------------
 
 function extractVideoIdFromUrl(url: string): string | null {
@@ -109,16 +112,22 @@ async function fetchYouTubeCaptions(videoId: string): Promise<TimedLine[] | null
 }
 
 /**
- * Chỉ còn một fallback duy nhất: caption timedtext của YouTube (có timestamp thật).
+ * Nguồn phụ duy nhất: caption timedtext của YouTube (có timestamp thật).
  * Nguồn AI sinh lời đã bị bỏ — lời bịa còn tệ hơn không có lời.
  * LRCLIB và lyrics.ovh do lyricsExt tự lo, không gọi lại ở đây.
+ *
+ * CẢNH BÁO (đã kiểm chứng 04/08/2026): endpoint timedtext công khai giờ trả về
+ * HTTP 200 với body RỖNG cho cả video có phụ đề — YouTube yêu cầu URL đã ký.
+ * Lấy `base_url` đã ký từ youtubei.js cũng trả rỗng, và `info.getTranscript()`
+ * trả 400 trên client WEB. Nên trên thực tế nhánh này gần như luôn thất bại;
+ * giữ lại vì chi phí chỉ là một request, nhưng đừng trông cậy vào nó.
  */
 export async function attemptFallbackLyrics(session: LiveLyricsSession): Promise<void> {
   if (session.lyricsAttempted || session.lines.length > 0) return;
   session.lyricsAttempted = true;
 
   const { track } = session;
-  console.log(`[lyrics] lrclib/ovh miss → trying YouTube captions for: ${track.title}`);
+  console.log(`[lyrics] chưa có lyrics sau ${LYRICS_WAIT_MS / 1000}s → thử YouTube captions: ${track.title}`);
 
   const videoId = extractVideoIdFromUrl(track.url);
   if (videoId) {
@@ -173,10 +182,7 @@ async function pushLyricsToEmbed(session: LiveLyricsSession): Promise<void> {
     const player = getPlayer(session.guildId);
     if (!player || !session.message) return;
     const freshEmbed = buildNowPlayingEmbed(session.track, player);
-    const lyricsValue = session.timedLines?.length
-      ? buildTimedCaptionsDisplay(session.timedLines, player.getTime().current)
-      : buildLyricsDisplay(session.lines, true, false);
-    freshEmbed.addFields({ name: "🎤 Lyrics", value: lyricsValue });
+    freshEmbed.addFields({ name: "🎤 Lyrics", value: renderLyricsField(session, player) });
     freshEmbed.setFooter({ text: "🎵 /livelyrics off để tắt" });
     session.embed = freshEmbed;
     const components = session.controlRow ? [session.controlRow] : [];
@@ -217,30 +223,63 @@ export function buildLyricsDisplay(lines: string[], timedOut = false, isSearchin
       : "⏳ Đang chờ lyrics...";
   }
 
-  // Full lyrics mode (Gemini/YouTube captions): plain text, truncate to fit 1024 chars
-  if (lines.length > 10) {
-    const LIMIT = 1020;
-    let result = "";
-    let shown = 0;
-    for (const line of lines) {
-      const addition = line + "\n";
-      if (result.length + addition.length > LIMIT - 20) {
-        result += `*...(+${lines.length - shown} dòng nữa)*`;
-        break;
-      }
-      result += addition;
-      shown++;
-    }
-    return result.trim();
-  }
-
-  // Synced scroll mode (lrclib): last few lines with border
+  // Cửa sổ trượt từ payload `current` của lyricsExt: dòng cuối ĐÚNG là dòng đang hát.
   let display = "";
   for (let i = 0; i < lines.length - 1; i++) {
     display += `┃ *${lines[i]}*\n`;
   }
   display += `┃ **➤ ${lines[lines.length - 1]}**`;
   return display;
+}
+
+/** Ghép các dòng cho vừa giới hạn 1024 ký tự của một embed field. */
+function fitLines(lines: string[], reserved = 0): string {
+  const LIMIT = 1020 - reserved;
+  let result = "";
+  let shown = 0;
+  for (const line of lines) {
+    const addition = `${line}\n`;
+    if (result.length + addition.length > LIMIT - 24) {
+      result += `*...(+${lines.length - shown} dòng nữa)*`;
+      break;
+    }
+    result += addition;
+    shown++;
+  }
+  return result.trim();
+}
+
+/**
+ * Lời thường: hiển thị dạng khối tĩnh và nói rõ là không chạy theo nhạc.
+ *
+ * Trước đây lời thường bị render bằng cùng format với lời synced (có mũi tên ➤ ở
+ * dòng cuối) nên trông như đang chạy realtime dù thực chất đứng yên — gây hiểu nhầm
+ * là bot hỏng, trong khi thật ra nguồn không hề có timestamp.
+ */
+export function buildPlainLyricsBlock(lines: string[]): string {
+  const note = "📄 *Lời thường — nguồn không có timestamp nên không chạy theo nhạc*";
+  return `${note}\n${fitLines(lines, note.length + 1)}`;
+}
+
+/** Chọn đúng cách hiển thị theo dữ liệu lyrics mà session đang có. */
+export function renderLyricsField(
+  session: LiveLyricsSession,
+  player: ReturnType<typeof getPlayer>,
+): string {
+  if (session.timedLines?.length && player) {
+    return buildTimedCaptionsDisplay(session.timedLines, player.getTime().current);
+  }
+  if (session.plainShown && session.lines.length) {
+    return buildPlainLyricsBlock(session.lines);
+  }
+  const timedOut = Date.now() - session.createdAt > LYRICS_WAIT_MS;
+  const isSearching = timedOut && !session.lyricsAttempted && session.lines.length === 0;
+  return buildLyricsDisplay(session.lines, timedOut, isSearching);
+}
+
+/** Đã chờ quá lâu mà chưa có lyrics → thử nguồn phụ (một lần duy nhất). */
+export function shouldAttemptFallback(session: LiveLyricsSession): boolean {
+  return Date.now() - session.createdAt > LYRICS_WAIT_MS && !session.lyricsAttempted;
 }
 
 function buildSessionEmbed(
@@ -296,11 +335,12 @@ export function updateLiveLyricsFromExt(
     session.lines.push(currentLine);
     if (session.lines.length > 6) session.lines.shift();
   } else if (plainText && !session.plainShown) {
+    // Giữ toàn bộ dòng: buildPlainLyricsBlock tự cắt cho vừa embed field.
+    // (Trước đây slice(0,6) làm lời thường trông giống cửa sổ trượt của lời synced.)
     const lines = plainText
       .split("\n")
       .map((l) => l.trim())
-      .filter(Boolean)
-      .slice(0, 6);
+      .filter(Boolean);
     if (!lines.length) return;
     session.plainShown = true;
     session.lines = lines;
@@ -395,16 +435,11 @@ const cmd: SlashCommand = {
           clearInterval(session.progressInterval);
           return;
         }
-        const timedOut = Date.now() - session.createdAt > 12000;
-        const isSearching = timedOut && !session.lyricsAttempted && session.lines.length === 0;
-        if (timedOut && !session.lyricsAttempted) {
+        if (shouldAttemptFallback(session)) {
           attemptFallbackLyrics(session).catch(() => {}); // fire-and-forget
         }
         const freshEmbed = buildNowPlayingEmbed(session.track, currentPlayer);
-        const lyricsValue = session.timedLines?.length
-          ? buildTimedCaptionsDisplay(session.timedLines, currentPlayer.getTime().current)
-          : buildLyricsDisplay(session.lines, timedOut, isSearching);
-        freshEmbed.addFields({ name: "🎤 Lyrics", value: lyricsValue });
+        freshEmbed.addFields({ name: "🎤 Lyrics", value: renderLyricsField(session, currentPlayer) });
         freshEmbed.setFooter({ text: "🎵 /livelyrics off để tắt" });
         session.embed = freshEmbed;
         const components = session.controlRow ? [session.controlRow] : [];
