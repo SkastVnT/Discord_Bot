@@ -29,7 +29,7 @@ const cmd: SlashCommand = {
       const arch = os.arch();
       const nodeVersion = process.version;
 
-      const queueSize = player?.queue.tracks.size ?? 0;
+      const queueSize = player?.queue.size ?? 0;
       const isPlaying = player?.isPlaying ?? false;
       const currentTrack = player?.currentTrack?.title ?? "Không có";
 

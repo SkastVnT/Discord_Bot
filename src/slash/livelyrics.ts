@@ -6,7 +6,7 @@ import {
   type Message,
 } from "discord.js";
 import { getPlayer } from "ziplayer";
-import type { Track, LyricsPayload } from "ziplayer";
+import type { Track } from "ziplayer";
 import {
   COLORS,
   buildNowPlayingEmbed,
@@ -20,6 +20,33 @@ import type { SlashCommand } from "../types/command.js";
 export interface TimedLine {
   startMs: number;
   text: string;
+}
+
+/**
+ * Payload của event `lyricsCreate` / `lyricsChange`.
+ *
+ * `@ziplayer/extension@0.3.3` không re-export type `LyricsResult` ở entrypoint
+ * (index.d.ts chỉ export class `lyricsExt`), và `ManagerEvents` khai lyrics là `any`,
+ * nên khai lại đúng các field mà lyricsExt thực sự emit.
+ */
+export interface LyricsPayload {
+  provider?: "lrclib" | "lyricsovh";
+  source?: string;
+  url?: string;
+  /** Lời thường */
+  text?: string | null;
+  /** Lời LRC có timestamp */
+  synced?: string | null;
+  current?: string | null;
+  previous?: string | null;
+  next?: string | null;
+  lineIndex?: number;
+  timeMs?: number;
+  trackName?: string;
+  artistName?: string;
+  albumName?: string;
+  matchedBy?: string;
+  lang?: string | null;
 }
 
 export interface LiveLyricsSession {
@@ -81,39 +108,17 @@ async function fetchYouTubeCaptions(videoId: string): Promise<TimedLine[] | null
   return null;
 }
 
-async function fetchGeminiLyrics(title: string, artist: string): Promise<string | null> {
-  const apiKey = process.env.GEMINI_API_KEY_1;
-  if (!apiKey) return null;
-  try {
-    const prompt = artist
-      ? `Hãy cung cấp lời bài hát đầy đủ của bài "${title}" - ${artist}. Chỉ trả về lời thuần túy, không tiêu đề, không giải thích. Nếu không biết chính xác, trả về UNKNOWN.`
-      : `Hãy cung cấp lời bài hát đầy đủ của bài "${title}". Chỉ trả về lời thuần túy, không tiêu đề, không giải thích. Nếu không biết chính xác, trả về UNKNOWN.`;
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
-      },
-    );
-    if (!res.ok) return null;
-    const data = await res.json() as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
-    };
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
-    if (!text || text.includes("UNKNOWN")) return null;
-    return text;
-  } catch {
-    return null;
-  }
-}
-
+/**
+ * Chỉ còn một fallback duy nhất: caption timedtext của YouTube (có timestamp thật).
+ * Nguồn AI sinh lời đã bị bỏ — lời bịa còn tệ hơn không có lời.
+ * LRCLIB và lyrics.ovh do lyricsExt tự lo, không gọi lại ở đây.
+ */
 export async function attemptFallbackLyrics(session: LiveLyricsSession): Promise<void> {
   if (session.lyricsAttempted || session.lines.length > 0) return;
   session.lyricsAttempted = true;
 
   const { track } = session;
-  console.log(`[lyrics] lrclib miss → trying fallbacks for: ${track.title}`);
+  console.log(`[lyrics] lrclib/ovh miss → trying YouTube captions for: ${track.title}`);
 
   const videoId = extractVideoIdFromUrl(track.url);
   if (videoId) {
@@ -121,21 +126,46 @@ export async function attemptFallbackLyrics(session: LiveLyricsSession): Promise
     if (captions?.length) {
       session.timedLines = captions;
       session.lines = captions.map(l => l.text);
+      console.log(`[lyrics] selected synced=true source=youtube-captions parsedLines=${captions.length}`);
       await pushLyricsToEmbed(session);
       return;
     }
   }
 
-  console.log(`[lyrics] Trying Gemini for: ${track.title}`);
-  const geminiText = await fetchGeminiLyrics(track.title, track.author ?? "");
-  if (geminiText) {
-    session.lines = geminiText.split("\n").map(l => l.trim()).filter(l => l.length > 0);
-    console.log(`[lyrics] Gemini returned ${session.lines.length} lines`);
-    await pushLyricsToEmbed(session);
-    return;
+  console.log(`[lyrics] Không tìm thấy lyrics từ nguồn nào cho: ${track.title}`);
+}
+
+// ─── LRC parser ───────────────────────────────────────────────────────────────
+// Một dòng LRC có thể mang nhiều mốc thời gian: "[00:12.00][01:20.50]lời hát".
+const LRC_TIMESTAMP = /\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
+
+export function parseLrc(lrc: string): TimedLine[] {
+  const out: TimedLine[] = [];
+
+  for (const raw of lrc.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    LRC_TIMESTAMP.lastIndex = 0;
+    const stamps: number[] = [];
+    let consumed = 0;
+    let match: RegExpExecArray | null;
+
+    // Chỉ nhận các mốc nằm liền nhau ở đầu dòng, phần còn lại là lời.
+    while ((match = LRC_TIMESTAMP.exec(line)) !== null && match.index === consumed) {
+      consumed = match.index + match[0].length;
+      const frac = match[3] ? Number(match[3].padEnd(3, "0")) : 0;
+      stamps.push(Number(match[1]) * 60_000 + Number(match[2]) * 1_000 + frac);
+    }
+
+    if (!stamps.length) continue; // dòng metadata kiểu [ar:...] hoặc rác
+    const text = line.slice(consumed).trim();
+    if (!text) continue; // khoảng lặng, không hiển thị
+
+    for (const startMs of stamps) out.push({ startMs, text });
   }
 
-  console.log(`[lyrics] All fallbacks failed for: ${track.title}`);
+  return out.sort((a, b) => a.startMs - b.startMs);
 }
 
 async function pushLyricsToEmbed(session: LiveLyricsSession): Promise<void> {
@@ -143,8 +173,8 @@ async function pushLyricsToEmbed(session: LiveLyricsSession): Promise<void> {
     const player = getPlayer(session.guildId);
     if (!player || !session.message) return;
     const freshEmbed = buildNowPlayingEmbed(session.track, player);
-    const lyricsValue = session.timedLines?.length && player.position !== undefined
-      ? buildTimedCaptionsDisplay(session.timedLines, player.position)
+    const lyricsValue = session.timedLines?.length
+      ? buildTimedCaptionsDisplay(session.timedLines, player.getTime().current)
       : buildLyricsDisplay(session.lines, true, false);
     freshEmbed.addFields({ name: "🎤 Lyrics", value: lyricsValue });
     freshEmbed.setFooter({ text: "🎵 /livelyrics off để tắt" });
@@ -239,6 +269,24 @@ export function updateLiveLyricsFromExt(
     session.track.title === track?.title;
   if (!sameTrack) return;
 
+  // Đường tốt nhất: LRC đầy đủ. Parse một lần rồi để display chạy theo getTime(),
+  // thay vì dồn từng dòng vào mảng (cách cũ lệch ngay khi seek hoặc pause).
+  if (session.timedLines?.length) return;
+
+  if (lyricsPayload?.synced) {
+    const timed = parseLrc(lyricsPayload.synced);
+    if (timed.length) {
+      session.timedLines = timed;
+      session.lines = timed.map((l) => l.text);
+      session.lyricsAttempted = true;
+      console.log(
+        `[lyrics] selected synced=true source=${lyricsPayload.provider ?? "?"} parsedLines=${timed.length}`,
+      );
+      void pushLyricsToEmbed(session);
+      return;
+    }
+  }
+
   const currentLine = lyricsPayload?.current?.trim() ?? "";
   const plainText = lyricsPayload?.text?.trim() ?? "";
 
@@ -257,6 +305,9 @@ export function updateLiveLyricsFromExt(
     session.plainShown = true;
     session.lines = lines;
     session.lastLine = lines[lines.length - 1] ?? null;
+    console.log(
+      `[lyrics] selected synced=false source=${lyricsPayload.provider ?? "?"} (lời thường, không có timestamp)`,
+    );
   } else {
     return;
   }
@@ -350,8 +401,8 @@ const cmd: SlashCommand = {
           attemptFallbackLyrics(session).catch(() => {}); // fire-and-forget
         }
         const freshEmbed = buildNowPlayingEmbed(session.track, currentPlayer);
-        const lyricsValue = session.timedLines?.length && currentPlayer.position !== undefined
-          ? buildTimedCaptionsDisplay(session.timedLines, currentPlayer.position)
+        const lyricsValue = session.timedLines?.length
+          ? buildTimedCaptionsDisplay(session.timedLines, currentPlayer.getTime().current)
           : buildLyricsDisplay(session.lines, timedOut, isSearching);
         freshEmbed.addFields({ name: "🎤 Lyrics", value: lyricsValue });
         freshEmbed.setFooter({ text: "🎵 /livelyrics off để tắt" });

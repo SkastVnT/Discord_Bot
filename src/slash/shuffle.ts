@@ -13,11 +13,11 @@ const cmd: SlashCommand = {
     try {
       const player = getPlayer(interaction.guildId!);
 
-      if (!player?.queue.tracks.size) {
+      if (!player?.queue.size) {
         return interaction.editReply({ embeds: [errorEmbed("Không có bài hát nào trong danh sách chờ!")] });
       }
 
-      const count = player.queue.tracks.size;
+      const count = player.queue.size;
       player.shuffle();
       await interaction.editReply({
         embeds: [successEmbed(`🔀 Đã trộn ngẫu nhiên **${count}** bài hát!`)],

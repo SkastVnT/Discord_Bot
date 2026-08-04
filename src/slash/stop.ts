@@ -19,7 +19,7 @@ const cmd: SlashCommand = {
         });
       }
 
-      const queueSize = player.queue.tracks.size;
+      const queueSize = player.queue.size;
       player.stop();
       player.queue.clear();
 

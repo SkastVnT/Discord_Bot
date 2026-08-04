@@ -20,12 +20,12 @@ const cmd: SlashCommand = {
     try {
       const player = getPlayer(interaction.guildId!);
 
-      if (!player?.queue.tracks.size) {
+      if (!player?.queue.size) {
         return interaction.editReply({ embeds: [errorEmbed("Không có bài hát nào trong danh sách chờ!")] });
       }
 
       const num = interaction.options.getNumber("tracknumber", true);
-      if (num > player.queue.tracks.size) {
+      if (num > player.queue.size) {
         return interaction.editReply({ embeds: [warningEmbed("Số bài hát không hợp lệ!")] });
       }
 

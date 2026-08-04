@@ -27,13 +27,13 @@ const cmd: SlashCommand = {
     try {
       const player = getPlayer(interaction.guildId!);
 
-      if (!player?.queue.tracks.size) {
+      if (!player?.queue.size) {
         return interaction.editReply({ embeds: [errorEmbed("Không có bài hát nào trong hàng chờ!")] });
       }
 
       const from = interaction.options.getNumber("from", true) - 1;
       const to = interaction.options.getNumber("to", true) - 1;
-      const tracks = player.queue.tracks.toArray();
+      const tracks = player.queue.getTracks();
 
       if (from < 0 || from >= tracks.length || to < 0 || to >= tracks.length) {
         return interaction.editReply({
@@ -53,7 +53,7 @@ const cmd: SlashCommand = {
       await interaction.editReply({
         embeds: [
           infoEmbed(`🔄 Di chuyển: **${track.title}**\nTừ vị trí **#${from + 1}** → **#${to + 1}**`)
-            .setThumbnail(track.thumbnail),
+            .setThumbnail(track.thumbnail ?? null),
         ],
       });
     } catch (error) {

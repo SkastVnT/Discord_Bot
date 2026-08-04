@@ -21,7 +21,8 @@ const cmd: SlashCommand = {
         ?.voice.channel;
       const channelName = voiceChannel?.name ?? "voice channel";
 
-      await player.disconnect();
+      // ZiPlayer 0.3.x không có player.disconnect(); destroy() ngắt voice và dọn player.
+      player.destroy();
 
       await interaction.editReply({
         embeds: [successEmbed(`🚪 Đã rời khỏi **${channelName}**!`)],

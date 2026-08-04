@@ -47,18 +47,31 @@ export function isYouTube(source?: string): boolean {
   return !source || source === "youtube" || source === "ytsr";
 }
 
-// ─── Duration Formatter (seconds → M:SS or H:MM:SS) ────────────────────────
+/**
+ * Tên nghệ sĩ của track.
+ *
+ * YouTubePlugin đặt tên kênh vào `metadata.author` và để trống `Track.author`,
+ * nên đọc thẳng `track.author` sẽ luôn ra "Unknown" với nhạc YouTube.
+ */
+export function trackAuthor(track: Track, fallback = "Unknown"): string {
+  const meta = track.metadata?.author;
+  return track.author || (typeof meta === "string" ? meta : "") || fallback;
+}
+
+// ─── Duration Formatter (milliseconds → M:SS or H:MM:SS) ───────────────────
+// ZiPlayer 0.3.x: Track.duration là số MILLISECOND (plugin tính length_seconds * 1000),
+// và getTime().current/total cũng là ms. Vẫn nhận string để đỡ các chuỗi đã format sẵn.
 export function formatDuration(raw: string | number | undefined | null): string {
   if (raw == null || raw === "") return "N/A";
-  let seconds: number;
+  let ms: number;
   if (typeof raw === "string") {
     if (raw.includes(":")) return raw; // already formatted
-    seconds = Number(raw);
+    ms = Number(raw);
   } else {
-    seconds = raw;
+    ms = raw;
   }
-  if (!Number.isFinite(seconds) || seconds < 0) return "N/A";
-  const t = Math.floor(seconds);
+  if (!Number.isFinite(ms) || ms < 0) return "N/A";
+  const t = Math.floor(ms / 1000);
   const h = Math.floor(t / 3600);
   const m = Math.floor((t % 3600) / 60);
   const s = t % 60;
@@ -85,7 +98,7 @@ export function buildNowPlayingEmbed(
     .setColor(sourceColor(track.source))
     .setTitle(track.title)
     .setURL(track.url)
-    .setAuthor({ name: track.author || "Unknown Artist" });
+    .setAuthor({ name: trackAuthor(track, "Unknown Artist") });
 
   if (isYouTube(track.source)) {
     embed.setImage(track.thumbnail ?? null);
@@ -99,12 +112,12 @@ export function buildNowPlayingEmbed(
   ];
 
   if (player) {
-    const queueSize = player.queue?.tracks?.size ?? 0;
+    const queueSize = player.queue?.size ?? 0;
     if (queueSize > 0) {
       fields.push({ name: "📜 Tiếp theo", value: `${queueSize} bài`, inline: true });
     }
 
-    const progress = player.getProgressBar?.({ timecodes: true, length: 16 });
+    const progress = player.getProgressBar?.({ size: 16, showTime: true });
     if (progress && typeof progress === "string" && progress.trim()) {
       fields.push({ name: "▶ Tiến trình", value: `\`${progress}\``, inline: false });
     }

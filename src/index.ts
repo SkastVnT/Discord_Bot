@@ -8,8 +8,8 @@ import { REST } from "@discordjs/rest";
 import { Routes } from "discord.js";
 import { PlayerManager, getPlayer } from "ziplayer";
 import { YouTubePlugin } from "@ziplayer/plugin";
-import { lyricsExt } from "@ziplayer/extension";
-import { buildControlRow, buildQueuePageRow, buildLyricsPageRow, buildNowPlayingEmbed, COLORS, errorEmbed } from "./utils/embeds.js";
+import { YTexec } from "@ziplayer/ytexecplug";
+import { buildControlRow, buildQueuePageRow, buildLyricsPageRow, buildNowPlayingEmbed, COLORS, errorEmbed, formatDuration } from "./utils/embeds.js";
 import { buildLyricsDisplay, buildTimedCaptionsDisplay, activeSessions, updateLiveLyricsFromExt, attemptFallbackLyrics } from "./slash/livelyrics.js";
 import { lyricsPageCache } from "./slash/lyrics.js";
 import type { SlashCommand } from "./types/command.js";
@@ -17,10 +17,8 @@ import type { SlashCommand } from "./types/command.js";
 dotenv.config();
 
 // ===========================================
-// 🔧 CJS interop for @ziplayer/ytexecplug
+// 🔧 createRequire for CJS-only modules (ffmpeg-static, dependency check)
 const require = createRequire(import.meta.url);
-type YTexecCtor = new () => { getStream: unknown };
-const { YTexec } = require("@ziplayer/ytexecplug") as { YTexec: YTexecCtor };
 
 // ===========================================
 // ✅ Env validation
@@ -44,20 +42,22 @@ if (ffmpegPath) process.env.FFMPEG_PATH = ffmpegPath;
 
 // ===========================================
 // 🔌 Plugins
-const ytbplg = new YouTubePlugin();
-ytbplg.getStream = new YTexec().getStream;
+// YouTubePlugin 0.3.x tự lo PoToken (bgutils-js) nên đường stream gốc thường chạy được.
+// yt-dlp chỉ dùng khi đường gốc fail — dùng hook fallbackStream của plugin thay vì
+// ghi đè getStream như trước (cách cũ lấy method rời khỏi instance nên mất `this`).
+const ytexec = new YTexec();
+const ytbplg = new YouTubePlugin({
+  fallbackStream: (track) => ytexec.getStream(track),
+});
 
 // ===========================================
 // 🎧 Player Manager
+// KHÔNG khai extension ở đây: ZiPlayer 0.3.x activate toàn bộ extension mức manager
+// khi create() không truyền `extensions`, nên mọi guild sẽ chia sẻ đúng một instance
+// lyricsExt (extension giữ state theo track/player → lyrics lẫn giữa các server).
+// Mỗi player tự mang instance riêng, tạo trong src/utils/player.ts.
 const playerManager = new PlayerManager({
   plugins: [ytbplg],
-  extensions: [
-    new lyricsExt(null, {
-      provider: "lrclib",
-      includeSynced: true,
-      autoFetchOnTrackStart: true,
-    }),
-  ],
 });
 
 // ===========================================
@@ -266,19 +266,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       await interaction.deferUpdate();
-      const tracks = player.queue.tracks.toArray();
+      const tracks = player.queue.getTracks();
       const totalPages = Math.ceil(tracks.length / 10) || 1;
       if (page < 0 || page >= totalPages) return;
       const current = player.currentTrack;
       const queueStr = tracks
         .slice(page * 10, page * 10 + 10)
-        .map((t, i) => `**${page * 10 + i + 1}.** \`[${t.duration ?? "N/A"}]\` ${t.title}`)
+        .map((t, i) => `**${page * 10 + i + 1}.** \`[${formatDuration(t.duration)}]\` ${t.title}`)
         .join("\n");
       const queueEmbed = new EmbedBuilder()
         .setColor(COLORS.queue)
         .setTitle(`\ud83d\udcdc H\u00e0ng ch\u1edd \u2014 Trang ${page + 1}/${totalPages}`)
         .setDescription(
-          `\ud83c\udfb6 **\u0110ang ph\u00e1t:** ${current ? `\`[${current.duration ?? "N/A"}]\` ${current.title}` : "*Kh\u00f4ng c\u00f3*"}\n\n${queueStr || "*Tr\u1ed1ng!*"}`,
+          `\ud83c\udfb6 **\u0110ang ph\u00e1t:** ${current ? `\`[${formatDuration(current.duration)}]\` ${current.title}` : "*Kh\u00f4ng c\u00f3*"}\n\n${queueStr || "*Tr\u1ed1ng!*"}`,
         )
         .setThumbnail(current?.thumbnail ?? null)
         .setFooter({ text: `${tracks.length} b\u00e0i trong h\u00e0ng ch\u1edd` });
@@ -339,7 +339,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 // ===========================================
 // 🎶 Player Events
-playerManager.on("audioTrackAdd", (_player, track) => {
+playerManager.on("queueAdd", (_player, track) => {
   console.log(`🎵 Đã thêm: ${track.title} vào queue`);
 });
 
@@ -386,8 +386,8 @@ playerManager.on("trackStart", async (player, track) => {
         if (timedOut && !session.lyricsAttempted) {
           attemptFallbackLyrics(session).catch(() => {});
         }
-        const lyricsValue = session.timedLines?.length && currentPlayer.position !== undefined
-          ? buildTimedCaptionsDisplay(session.timedLines, currentPlayer.position)
+        const lyricsValue = session.timedLines?.length
+          ? buildTimedCaptionsDisplay(session.timedLines, currentPlayer.getTime().current)
           : buildLyricsDisplay(session.lines, timedOut, isSearching);
         freshEmbed.addFields({ name: "🎤 Lyrics", value: lyricsValue });
         freshEmbed.setFooter({ text: "🎵 /livelyrics off để tắt" });
@@ -439,11 +439,8 @@ playerManager.on("queueEnd", (player) => {
   }
 });
 
-playerManager.on("disconnect", (player) => {
-  console.log("🚪 Bot đã rời voice channel");
-  resetIdleTimer(player.guildId);
-});
-
+// NOTE: ZiPlayer 0.3.x không có event "disconnect" — playerDestroy đã bao trùm
+// trường hợp bot rời voice channel, nên listener cũ được gộp vào đây.
 playerManager.on("playerDestroy", (player) => {
   console.log("🚪 Player bị hủy");
   resetIdleTimer(player.guildId);

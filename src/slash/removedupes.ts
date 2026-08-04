@@ -13,11 +13,11 @@ const cmd: SlashCommand = {
     try {
       const player = getPlayer(interaction.guildId!);
 
-      if (!player?.queue.tracks.size) {
+      if (!player?.queue.size) {
         return interaction.editReply({ embeds: [errorEmbed("Không có bài hát nào trong hàng chờ!")] });
       }
 
-      const tracks = player.queue.tracks.toArray();
+      const tracks = player.queue.getTracks();
       const seen = new Set<string>();
       const duplicates: number[] = [];
 
@@ -41,7 +41,7 @@ const cmd: SlashCommand = {
       await interaction.editReply({
         embeds: [
           successEmbed(
-            `🗑️ Đã xóa **${duplicates.length}** bài trùng lặp! Còn lại: **${player.queue.tracks.size}** bài`,
+            `🗑️ Đã xóa **${duplicates.length}** bài trùng lặp! Còn lại: **${player.queue.size}** bài`,
           ),
         ],
       });

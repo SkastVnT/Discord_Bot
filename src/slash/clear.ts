@@ -17,7 +17,7 @@ const cmd: SlashCommand = {
         return interaction.editReply({ embeds: [errorEmbed("Không có hàng chờ nào!")] });
       }
 
-      const queueSize = player.queue.tracks.size;
+      const queueSize = player.queue.size;
 
       if (queueSize === 0) {
         return interaction.editReply({ embeds: [warningEmbed("Hàng chờ đã trống!")] });

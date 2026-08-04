@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
-import { COLORS, errorEmbed, warningEmbed } from "../utils/embeds.js";
+import { COLORS, errorEmbed, warningEmbed, formatDuration, trackAuthor } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -23,7 +23,8 @@ const cmd: SlashCommand = {
         return interaction.editReply({ embeds: [errorEmbed("Không có player nào đang hoạt động!")] });
       }
 
-      const history = player.history?.tracks?.toArray() ?? [];
+      // ZiPlayer 0.3.x: lịch sử nằm trong queue.previousTracks, Player không có .history
+      const history = player.queue.previousTracks;
 
       if (!history.length) {
         return interaction.editReply({ embeds: [warningEmbed("Chưa có lịch sử phát nhạc!")] });
@@ -41,7 +42,7 @@ const cmd: SlashCommand = {
         .map(
           (t, i) =>
             `**${page * 10 + i + 1}.** [${t.title}](${t.url})\n` +
-            `\`⏱️ ${t.duration}\` | \`👤 ${t.author}\``,
+            `\`⏱️ ${formatDuration(t.duration)}\` | \`👤 ${trackAuthor(t)}\``,
         )
         .join("\n\n");
 

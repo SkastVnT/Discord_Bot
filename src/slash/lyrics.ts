@@ -1,7 +1,8 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
+import type { Track } from "ziplayer";
 import { lyricsExt } from "@ziplayer/extension";
-import { COLORS, buildLyricsPageRow, errorEmbed } from "../utils/embeds.js";
+import { COLORS, buildLyricsPageRow, errorEmbed, trackAuthor } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const PAGE_SIZE = 3500;
@@ -42,23 +43,26 @@ const cmd: SlashCommand = {
   async run({ client: _client, interaction }) {
     await interaction.deferReply();
     try {
-      let query = interaction.options.getString("query") ?? null;
+      const queryInput = interaction.options.getString("query");
+      const currentTrack = getPlayer(interaction.guildId!)?.currentTrack ?? null;
 
-      if (!query) {
-        const player = getPlayer(interaction.guildId!);
-        const track = player?.currentTrack;
-        if (!track) {
-          return interaction.editReply({
-            embeds: [
-              errorEmbed("Không có bài hát nào đang phát và bạn chưa nhập tên bài!"),
-            ],
-          });
-        }
-        query = `${track.title} ${track.author ?? ""}`.trim();
+      if (!queryInput && !currentTrack) {
+        return interaction.editReply({
+          embeds: [
+            errorEmbed("Không có bài hát nào đang phát và bạn chưa nhập tên bài!"),
+          ],
+        });
       }
 
-      const lyric = new lyricsExt();
-      const res = await lyric.fetch({ title: query });
+      // lyricsExt.fetch() chỉ đọc title / metadata.author / duration của Track.
+      // Khi người dùng nhập tay thì không có Track thật nên dựng object tối thiểu,
+      // cast một lần duy nhất ở đây thay vì rải `as any` khắp file.
+      const track = queryInput
+        ? ({ title: queryInput, metadata: {} } as unknown as Track)
+        : currentTrack!;
+      const query = queryInput ?? `${currentTrack!.title} ${trackAuthor(currentTrack!, "")}`.trim();
+
+      const res = await new lyricsExt().fetch(track);
 
       if (!res?.text) {
         return interaction.editReply({

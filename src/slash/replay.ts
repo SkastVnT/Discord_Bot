@@ -24,7 +24,7 @@ const cmd: SlashCommand = {
       await interaction.editReply({
         embeds: [
           successEmbed(`🔁 Đang phát lại: **${track.title}**`)
-            .setThumbnail(track.thumbnail),
+            .setThumbnail(track.thumbnail ?? null),
         ],
       });
     } catch (error) {

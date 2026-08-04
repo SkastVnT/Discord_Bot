@@ -27,13 +27,13 @@ const cmd: SlashCommand = {
     try {
       const player = getPlayer(interaction.guildId!);
 
-      if (!player?.queue.tracks.size) {
+      if (!player?.queue.size) {
         return interaction.editReply({ embeds: [errorEmbed("Không có bài hát nào trong hàng chờ!")] });
       }
 
       const pos1 = interaction.options.getNumber("position1", true) - 1;
       const pos2 = interaction.options.getNumber("position2", true) - 1;
-      const tracks = player.queue.tracks.toArray();
+      const tracks = player.queue.getTracks();
 
       if (pos1 < 0 || pos1 >= tracks.length || pos2 < 0 || pos2 >= tracks.length) {
         return interaction.editReply({

@@ -17,10 +17,10 @@ const cmd: SlashCommand = {
         return interaction.editReply({ embeds: [errorEmbed("Không có player nào đang hoạt động!")] });
       }
 
-      const currentAutoplay = player.autoplay ?? false;
-      player.autoplay = !currentAutoplay;
+      // autoPlay() là method: gọi không tham số để đọc, có tham số để đặt.
+      const enabled = player.autoPlay(!player.autoPlay());
 
-      const embed = player.autoplay
+      const embed = enabled
         ? successEmbed("📻 Đã **bật** chế độ autoplay!\n\n✨ *Bot sẽ tự động phát bài liên quan khi hết queue*")
         : warningEmbed("❌ Đã **tắt** chế độ autoplay");
 

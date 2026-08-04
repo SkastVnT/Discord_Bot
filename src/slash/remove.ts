@@ -20,12 +20,12 @@ const cmd: SlashCommand = {
     try {
       const player = getPlayer(interaction.guildId!);
 
-      if (!player?.queue.tracks.size) {
+      if (!player?.queue.size) {
         return interaction.editReply({ embeds: [errorEmbed("Không có bài hát nào trong hàng chờ!")] });
       }
 
       const position = interaction.options.getNumber("position", true) - 1;
-      const tracks = player.queue.tracks.toArray();
+      const tracks = player.queue.getTracks();
 
       if (position < 0 || position >= tracks.length) {
         return interaction.editReply({
@@ -39,7 +39,7 @@ const cmd: SlashCommand = {
       await interaction.editReply({
         embeds: [
           successEmbed(`Đã xóa: **${removedTrack.title}** khỏi vị trí **#${position + 1}**`)
-            .setThumbnail(removedTrack.thumbnail),
+            .setThumbnail(removedTrack.thumbnail ?? null),
         ],
       });
     } catch (error) {

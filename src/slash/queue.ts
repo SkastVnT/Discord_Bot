@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
-import { COLORS, buildQueuePageRow, errorEmbed, warningEmbed } from "../utils/embeds.js";
+import { COLORS, buildQueuePageRow, errorEmbed, warningEmbed, formatDuration } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const PAGE_SIZE = 10;
@@ -24,13 +24,13 @@ const cmd: SlashCommand = {
         });
       }
 
-      if (!player.queue?.tracks) {
+      if (!player.queue) {
         return interaction.editReply({
           embeds: [errorEmbed("Không thể truy cập hàng chờ!")],
         });
       }
 
-      const tracks = player.queue.tracks.toArray();
+      const tracks = player.queue.getTracks();
       const totalPages = Math.ceil(tracks.length / PAGE_SIZE) || 1;
       const page = (interaction.options.getNumber("page") ?? 1) - 1;
 
@@ -45,7 +45,7 @@ const cmd: SlashCommand = {
         .slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE)
         .map(
           (t, i) =>
-            `**${page * PAGE_SIZE + i + 1}.** \`[${t.duration ?? "N/A"}]\` ${t.title ?? "Unknown"}`,
+            `**${page * PAGE_SIZE + i + 1}.** \`[${formatDuration(t.duration)}]\` ${t.title ?? "Unknown"}`,
         )
         .join("\n");
 
@@ -53,7 +53,7 @@ const cmd: SlashCommand = {
         .setColor(COLORS.queue)
         .setTitle(`📜 Hàng chờ — Trang ${page + 1}/${totalPages}`)
         .setDescription(
-          `🎶 **Đang phát:** ${current ? `\`[${current.duration ?? "N/A"}]\` ${current.title ?? "Unknown"}` : "*Không có*"}\n\n` +
+          `🎶 **Đang phát:** ${current ? `\`[${formatDuration(current.duration)}]\` ${current.title ?? "Unknown"}` : "*Không có*"}\n\n` +
             `${queueStr || "*Trống!*"}`,
         )
         .setThumbnail(current?.thumbnail ?? null)
