@@ -10,7 +10,7 @@ import { PlayerManager, getPlayer } from "ziplayer";
 import { YouTubePlugin } from "@ziplayer/plugin";
 import { YTexec } from "@ziplayer/ytexecplug";
 import { buildControlRow, buildQueuePageRow, buildLyricsPageRow, buildNowPlayingEmbed, COLORS, errorEmbed, formatDuration } from "./utils/embeds.js";
-import { activeSessions, updateLiveLyricsFromExt, attemptFallbackLyrics, renderLyricsField, shouldAttemptFallback } from "./slash/livelyrics.js";
+import { activeSessions, updateLiveLyricsFromExt, startSessionTicker } from "./slash/livelyrics.js";
 import { lyricsPageCache } from "./slash/lyrics.js";
 import type { SlashCommand } from "./types/command.js";
 
@@ -373,27 +373,7 @@ playerManager.on("trackStart", async (player, track) => {
     session.embed = newEmbed;
     session.message = newMessage;
 
-    session.progressInterval = setInterval(async () => {
-      try {
-        const currentPlayer = getPlayer(guildId);
-        if (!currentPlayer?.isPlaying) {
-          clearInterval(session.progressInterval);
-          return;
-        }
-        const freshEmbed = buildNowPlayingEmbed(session.track, currentPlayer);
-        if (shouldAttemptFallback(session)) {
-          attemptFallbackLyrics(session).catch(() => {});
-        }
-        freshEmbed.addFields({ name: "🎤 Lyrics", value: renderLyricsField(session, currentPlayer) });
-        freshEmbed.setFooter({ text: "🎵 /livelyrics off để tắt" });
-        const freshRow = buildControlRow(currentPlayer.isPaused, !!currentPlayer.previousTrack);
-        session.controlRow = freshRow;
-        await session.message.edit({ embeds: [freshEmbed], components: [freshRow] }).catch(() => {});
-        session.embed = freshEmbed;
-      } catch {
-        // ignore
-      }
-    }, 5000);
+    startSessionTicker(session);
 
     console.log(`🔄 Created new embed for: ${track.title}`);
   }

@@ -72,6 +72,24 @@ export const activeSessions = new Map<string, LiveLyricsSession>();
 /** Chờ lyricsExt bao lâu trước khi thử nguồn phụ. */
 const LYRICS_WAIT_MS = 12_000;
 
+/**
+ * Nhịp kiểm tra vị trí phát. 1200ms giữ độ trễ tối đa ~1,2s mà vẫn dưới ngưỡng
+ * rate limit edit message của Discord (khoảng 5 request/5s cho một channel).
+ */
+const TICK_MS = 1_200;
+
+/** Refresh embed định kỳ để thanh tiến trình không đứng yên khi không có lyrics. */
+const FULL_REFRESH_MS = 5_000;
+
+/**
+ * Bù trễ hiển thị: mỗi tick cách nhau TICK_MS nên trung bình chậm TICK_MS/2, cộng
+ * thêm ~200ms cho một lần edit qua Discord API.
+ *
+ * Không bù nhiều hơn: getTime().current lấy từ playbackDuration — lượng audio đã đẩy
+ * ra voice connection — nên vốn đã hơi sớm hơn thứ người nghe thực sự nghe được.
+ */
+const LYRICS_LEAD_MS = TICK_MS / 2 + 200;
+
 // --------------- Fallback lyrics helpers ---------------
 
 function extractVideoIdFromUrl(url: string): string | null {
@@ -190,16 +208,18 @@ async function pushLyricsToEmbed(session: LiveLyricsSession): Promise<void> {
   } catch { /* ignore */ }
 }
 
-export function buildTimedCaptionsDisplay(timedLines: TimedLine[], positionMs: number): string {
-  // Find the last line whose startMs <= current position
-  let currentIdx = 0;
+/** Dòng đang hát = dòng cuối cùng có startMs <= vị trí phát hiện tại. */
+export function currentLineIndex(timedLines: TimedLine[], positionMs: number): number {
+  let idx = 0;
   for (let i = 0; i < timedLines.length; i++) {
-    if (timedLines[i].startMs <= positionMs) {
-      currentIdx = i;
-    } else {
-      break;
-    }
+    if (timedLines[i]!.startMs <= positionMs) idx = i;
+    else break;
   }
+  return idx;
+}
+
+export function buildTimedCaptionsDisplay(timedLines: TimedLine[], positionMs: number): string {
+  const currentIdx = currentLineIndex(timedLines, positionMs);
   // Show 2 lines before + current + 2 lines after
   const start = Math.max(0, currentIdx - 2);
   const end = Math.min(timedLines.length - 1, currentIdx + 2);
@@ -267,7 +287,10 @@ export function renderLyricsField(
   player: ReturnType<typeof getPlayer>,
 ): string {
   if (session.timedLines?.length && player) {
-    return buildTimedCaptionsDisplay(session.timedLines, player.getTime().current);
+    return buildTimedCaptionsDisplay(
+      session.timedLines,
+      player.getTime().current + LYRICS_LEAD_MS,
+    );
   }
   if (session.plainShown && session.lines.length) {
     return buildPlainLyricsBlock(session.lines);
@@ -280,6 +303,65 @@ export function renderLyricsField(
 /** Đã chờ quá lâu mà chưa có lyrics → thử nguồn phụ (một lần duy nhất). */
 export function shouldAttemptFallback(session: LiveLyricsSession): boolean {
   return Date.now() - session.createdAt > LYRICS_WAIT_MS && !session.lyricsAttempted;
+}
+
+/**
+ * Timer duy nhất của một session, thay cho 3 bản copy-paste trước đây ở
+ * index.ts, play.ts và livelyrics.ts.
+ *
+ * Tick mỗi TICK_MS nhưng CHỈ edit message khi dòng lyrics thực sự đổi, hoặc mỗi
+ * FULL_REFRESH_MS để cập nhật thanh tiến trình. Nhờ vậy độ trễ tối đa giảm từ 5s
+ * xuống ~1,2s mà số lần gọi API không tăng: một bài 62 dòng vẫn chỉ khoảng 62 lần
+ * edit, đúng lúc dòng đổi, thay vì 5s một lần bất kể có đổi hay không.
+ */
+export function startSessionTicker(session: LiveLyricsSession): void {
+  if (session.progressInterval) clearInterval(session.progressInterval);
+
+  let lastLineIdx = -1;
+  let lastFullRefresh = 0;
+
+  session.progressInterval = setInterval(() => {
+    void (async () => {
+      try {
+        const player = getPlayer(session.guildId);
+        if (!player?.isPlaying) {
+          if (session.progressInterval) clearInterval(session.progressInterval);
+          return;
+        }
+
+        if (shouldAttemptFallback(session)) {
+          attemptFallbackLyrics(session).catch(() => {}); // fire-and-forget
+        }
+
+        let lineChanged = false;
+        if (session.timedLines?.length) {
+          const idx = currentLineIndex(
+            session.timedLines,
+            player.getTime().current + LYRICS_LEAD_MS,
+          );
+          if (idx !== lastLineIdx) {
+            lastLineIdx = idx;
+            lineChanged = true;
+          }
+        }
+
+        const now = Date.now();
+        if (!lineChanged && now - lastFullRefresh < FULL_REFRESH_MS) return;
+        lastFullRefresh = now;
+
+        const freshEmbed = buildNowPlayingEmbed(session.track, player);
+        freshEmbed.addFields({ name: "🎤 Lyrics", value: renderLyricsField(session, player) });
+        freshEmbed.setFooter({ text: "🎵 /livelyrics off để tắt" });
+        // Cập nhật luôn nút điều khiển để icon pause/prev khớp trạng thái thật.
+        const freshRow = buildControlRow(player.isPaused, !!player.previousTrack);
+        session.controlRow = freshRow;
+        session.embed = freshEmbed;
+        await session.message.edit({ embeds: [freshEmbed], components: [freshRow] }).catch(() => {});
+      } catch {
+        // ignore
+      }
+    })();
+  }, TICK_MS);
 }
 
 function buildSessionEmbed(
@@ -428,26 +510,7 @@ const cmd: SlashCommand = {
     };
     activeSessions.set(guildId, session);
 
-    session.progressInterval = setInterval(async () => {
-      try {
-        const currentPlayer = getPlayer(guildId);
-        if (!currentPlayer?.isPlaying) {
-          clearInterval(session.progressInterval);
-          return;
-        }
-        if (shouldAttemptFallback(session)) {
-          attemptFallbackLyrics(session).catch(() => {}); // fire-and-forget
-        }
-        const freshEmbed = buildNowPlayingEmbed(session.track, currentPlayer);
-        freshEmbed.addFields({ name: "🎤 Lyrics", value: renderLyricsField(session, currentPlayer) });
-        freshEmbed.setFooter({ text: "🎵 /livelyrics off để tắt" });
-        session.embed = freshEmbed;
-        const components = session.controlRow ? [session.controlRow] : [];
-        await session.message.edit({ embeds: [freshEmbed], components }).catch(() => {});
-      } catch {
-        // ignore
-      }
-    }, 5000);
+    startSessionTicker(session);
 
     const checkInterval = setInterval(async () => {
       const currentSession = activeSessions.get(guildId);

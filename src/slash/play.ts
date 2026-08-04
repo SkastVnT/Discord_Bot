@@ -8,7 +8,7 @@ import {
 import { getPlayer } from "ziplayer";
 import type { Player } from "ziplayer";
 import { ensurePlayer, ensureConnected } from "../utils/player.js";
-import { activeSessions, attemptFallbackLyrics, renderLyricsField, shouldAttemptFallback } from "./livelyrics.js";
+import { activeSessions, startSessionTicker } from "./livelyrics.js";
 import type { LiveLyricsSession } from "./livelyrics.js";
 import {
   buildNowPlayingEmbed,
@@ -312,26 +312,7 @@ const cmd: SlashCommand = {
           lyricsAttempted: false,
         };
 
-        session.progressInterval = setInterval(async () => {
-          try {
-            const currentPlayer = getPlayer(guildId);
-            if (!currentPlayer?.isPlaying) {
-              clearInterval(session.progressInterval);
-              return;
-            }
-            const freshEmbed = buildNowPlayingEmbed(session.track, currentPlayer);
-            if (shouldAttemptFallback(session)) {
-              attemptFallbackLyrics(session).catch(() => {});
-            }
-            freshEmbed.addFields({ name: "🎤 Lyrics", value: renderLyricsField(session, currentPlayer) });
-            freshEmbed.setFooter({ text: "🎵 /livelyrics off để tắt" });
-            session.embed = freshEmbed;
-            const components = session.controlRow ? [session.controlRow] : [];
-            await session.message.edit({ embeds: [freshEmbed], components }).catch(() => {});
-          } catch {
-            // ignore
-          }
-        }, 5000);
+        startSessionTicker(session);
 
         activeSessions.set(guildId, session);
         console.log(`🎤 Auto Live Info+Lyrics enabled for guild: ${guildId}`);
