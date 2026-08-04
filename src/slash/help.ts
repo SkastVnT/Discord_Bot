@@ -1,4 +1,5 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
+import { COLORS, errorEmbed } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -22,7 +23,7 @@ const cmd: SlashCommand = {
         const desc = cmd.data.description;
         const line = `\`/${name}\` - ${desc}`;
 
-        if (["play", "pause", "resume", "skip", "back", "stop", "quit"].includes(name)) {
+        if (["play", "pause", "resume", "skip", "back", "stop", "quit", "lyrics", "livelyrics"].includes(name)) {
           musicCommands.push(line);
         } else if (
           ["volume", "seek", "forward", "rewind", "replay", "speed"].includes(name)
@@ -40,7 +41,7 @@ const cmd: SlashCommand = {
       });
 
       const embed = new EmbedBuilder()
-        .setColor("Purple")
+        .setColor(COLORS.primary)
         .setTitle("🎵 Hướng dẫn sử dụng Bot")
         .setDescription(
           `Bot có **${commands.size}** lệnh\n\n💡 *Sử dụng các lệnh bằng cách gõ \`/\` trong chat*`,
@@ -91,7 +92,7 @@ const cmd: SlashCommand = {
       await interaction.editReply({ embeds: [embed] });
     } catch (error) {
       console.error("Lỗi trong lệnh help:", error);
-      await interaction.editReply("❌ Đã xảy ra lỗi khi hiển thị help!");
+      await interaction.editReply({ embeds: [errorEmbed("Đã xảy ra lỗi khi hiển thị help!")] });
     }
   },
 };

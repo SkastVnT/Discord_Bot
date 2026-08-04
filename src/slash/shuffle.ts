@@ -1,5 +1,6 @@
 import { SlashCommandBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
+import { successEmbed, errorEmbed } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -12,17 +13,18 @@ const cmd: SlashCommand = {
     try {
       const player = getPlayer(interaction.guildId!);
 
-      if (!player || !player.queue.tracks.size) {
-        return interaction.editReply("❌ Không có bài hát nào trong danh sách chờ!");
+      if (!player?.queue.size) {
+        return interaction.editReply({ embeds: [errorEmbed("Không có bài hát nào trong danh sách chờ!")] });
       }
 
+      const count = player.queue.size;
       player.shuffle();
-      await interaction.editReply(
-        `🔀 Danh sách gồm ${player.queue.tracks.size} bài hát đã được trộn ngẫu nhiên!`,
-      );
+      await interaction.editReply({
+        embeds: [successEmbed(`🔀 Đã trộn ngẫu nhiên **${count}** bài hát!`)],
+      });
     } catch (error) {
       console.error("Lỗi trong lệnh shuffle:", error);
-      await interaction.editReply("❌ Đã xảy ra lỗi khi trộn danh sách!");
+      await interaction.editReply({ embeds: [errorEmbed("Đã xảy ra lỗi khi trộn danh sách!")] });
     }
   },
 };

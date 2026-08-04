@@ -1,5 +1,6 @@
-import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
+import { SlashCommandBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
+import { buildNowPlayingEmbed, errorEmbed, warningEmbed } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -19,29 +20,28 @@ const cmd: SlashCommand = {
     try {
       const player = getPlayer(interaction.guildId!);
 
-      if (!player || !player.queue.tracks.size) {
-        return interaction.editReply("❌ Không có bài hát nào trong danh sách chờ!");
+      if (!player?.queue.size) {
+        return interaction.editReply({ embeds: [errorEmbed("Không có bài hát nào trong danh sách chờ!")] });
       }
 
       const num = interaction.options.getNumber("tracknumber", true);
-      if (num > player.queue.tracks.size) {
-        return interaction.editReply("⚠️ Số bài hát không hợp lệ!");
+      if (num > player.queue.size) {
+        return interaction.editReply({ embeds: [warningEmbed("Số bài hát không hợp lệ!")] });
       }
 
       await player.skip(num - 1);
       const track = player.currentTrack;
 
-      const embed = new EmbedBuilder()
-        .setColor("Green")
-        .setDescription(
-          `⏩ Đã chuyển đến: **[${track?.title ?? "N/A"}](${track?.url ?? ""})**`,
-        )
-        .setThumbnail(track?.thumbnail ?? null);
-
-      await interaction.editReply({ embeds: [embed] });
+      if (track) {
+        await interaction.editReply({
+          embeds: [buildNowPlayingEmbed(track, player, interaction.user)],
+        });
+      } else {
+        await interaction.editReply({ embeds: [errorEmbed("Đã chuyển bài nhưng không tải được thông tin bài tiếp theo!")] });
+      }
     } catch (error) {
       console.error("Lỗi trong lệnh skipto:", error);
-      await interaction.editReply("❌ Đã xảy ra lỗi khi chuyển bài hát!");
+      await interaction.editReply({ embeds: [errorEmbed("Đã xảy ra lỗi khi chuyển bài hát!")] });
     }
   },
 };

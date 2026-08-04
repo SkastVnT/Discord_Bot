@@ -1,5 +1,6 @@
-import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
+import { SlashCommandBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
+import { successEmbed, errorEmbed } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -19,33 +20,31 @@ const cmd: SlashCommand = {
     try {
       const player = getPlayer(interaction.guildId!);
 
-      if (!player || !player.queue.tracks.size) {
-        return interaction.editReply("❌ Không có bài hát nào trong hàng chờ!");
+      if (!player?.queue.size) {
+        return interaction.editReply({ embeds: [errorEmbed("Không có bài hát nào trong hàng chờ!")] });
       }
 
       const position = interaction.options.getNumber("position", true) - 1;
-      const tracks = player.queue.tracks.toArray();
+      const tracks = player.queue.getTracks();
 
       if (position < 0 || position >= tracks.length) {
-        return interaction.editReply(
-          `❌ Vị trí không hợp lệ! Hàng chờ có ${tracks.length} bài.`,
-        );
+        return interaction.editReply({
+          embeds: [errorEmbed(`Vị trí không hợp lệ! Hàng chờ có **${tracks.length}** bài.`)],
+        });
       }
 
       const removedTrack = tracks[position]!;
       player.queue.remove(position);
 
-      const embed = new EmbedBuilder()
-        .setColor("Red")
-        .setDescription(
-          `❌ Đã xóa: **${removedTrack.title}**\nTừ vị trí **#${position + 1}**`,
-        )
-        .setThumbnail(removedTrack.thumbnail);
-
-      await interaction.editReply({ embeds: [embed] });
+      await interaction.editReply({
+        embeds: [
+          successEmbed(`Đã xóa: **${removedTrack.title}** khỏi vị trí **#${position + 1}**`)
+            .setThumbnail(removedTrack.thumbnail ?? null),
+        ],
+      });
     } catch (error) {
       console.error("Lỗi trong lệnh remove:", error);
-      await interaction.editReply("❌ Đã xảy ra lỗi khi xóa bài hát!");
+      await interaction.editReply({ embeds: [errorEmbed("Đã xảy ra lỗi khi xóa bài hát!")] });
     }
   },
 };

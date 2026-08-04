@@ -1,5 +1,6 @@
 import { SlashCommandBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
+import { successEmbed, errorEmbed, warningEmbed } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -12,17 +13,27 @@ const cmd: SlashCommand = {
     try {
       const player = getPlayer(interaction.guildId!);
 
-      if (!player || !player.isPlaying) {
-        return interaction.editReply("❌ Không có bài hát nào đang phát!");
+      if (!player?.isPlaying) {
+        return interaction.editReply({
+          embeds: [errorEmbed("Không có bài hát nào đang phát!")],
+        });
+      }
+
+      if (player.isPaused) {
+        return interaction.editReply({
+          embeds: [warningEmbed("Nhạc đang được tạm dừng. Dùng `/resume` để tiếp tục!")],
+        });
       }
 
       player.pause();
-      await interaction.editReply(
-        "⏸️ Nhạc đã được tạm dừng. Sử dụng `/resume` để tiếp tục.",
-      );
+      await interaction.editReply({
+        embeds: [successEmbed("⏸️ Nhạc đã được tạm dừng. Dùng `/resume` để tiếp tục!")],
+      });
     } catch (error) {
       console.error("Lỗi trong lệnh pause:", error);
-      await interaction.editReply("❌ Đã xảy ra lỗi khi tạm dừng nhạc!");
+      await interaction.editReply({
+        embeds: [errorEmbed("Đã xảy ra lỗi khi tạm dừng nhạc!")],
+      });
     }
   },
 };

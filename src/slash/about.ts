@@ -1,4 +1,5 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
+import { COLORS, errorEmbed } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -15,7 +16,7 @@ const cmd: SlashCommand = {
       const minutes = Math.floor((uptime % 3600) / 60);
 
       const embed = new EmbedBuilder()
-        .setColor("Blue")
+        .setColor(COLORS.primary)
         .setTitle("ℹ️ Thông tin Bot Cá Nhân")
         .setThumbnail(client.user!.displayAvatarURL())
         .setDescription(
@@ -43,7 +44,7 @@ const cmd: SlashCommand = {
       await interaction.editReply({ embeds: [embed] });
     } catch (error) {
       console.error("Lỗi trong lệnh about:", error);
-      await interaction.editReply("❌ Đã xảy ra lỗi!");
+      await interaction.editReply({ embeds: [errorEmbed("Đã xảy ra lỗi!")] });
     }
   },
 };

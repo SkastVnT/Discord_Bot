@@ -1,16 +1,28 @@
-import { SlashCommandBuilder, EmbedBuilder, type GuildMember } from "discord.js";
+import {
+  SlashCommandBuilder,
+  EmbedBuilder,
+  type GuildMember,
+  type GuildTextBasedChannel,
+} from "discord.js";
 import {
   createAudioResource,
   createAudioPlayer,
   StreamType,
   NoSubscriberBehavior,
 } from "@discordjs/voice";
-import { getPlayer, getManager } from "ziplayer";
 import { existsSync, readdirSync, statSync } from "fs";
 import { join, extname, basename } from "path";
+import { COLORS, errorEmbed } from "../utils/embeds.js";
+import { ensurePlayer, ensureConnected } from "../utils/player.js";
 import type { SlashCommand } from "../types/command.js";
 
 // Bug fix #8: use MUSIC_FOLDER env var instead of hardcoded path
+
+// ZiPlayer 0.3.x Player không có chỗ nào để gắn AudioPlayer thô, nên giữ riêng
+// theo guildId ở đây thay vì nhồi vào player.userdata (đang dùng cho .channel).
+// Lấy type từ chính hàm factory: `import type { AudioPlayer }` dưới moduleResolution
+// Node16 tạo ra một declaration khác với bản value import nên hai bên không khớp nhau.
+const localAudioPlayers = new Map<string, ReturnType<typeof createAudioPlayer>>();
 
 const cmd: SlashCommand = {
   data: new SlashCommandBuilder()
@@ -85,21 +97,11 @@ const cmd: SlashCommand = {
     }
 
     try {
-      let player = getPlayer(interaction.guildId!);
-      if (!player) {
-        player = await getManager().create(interaction.guildId!, {
-          userdata: { channel: interaction.channel as import("discord.js").GuildTextBasedChannel | null },
-          selfDeaf: true,
-          volume: 80,
-          leaveOnEmpty: false,
-          leaveOnEnd: false,
-          leaveOnStop: false,
-        });
-      }
-
-      if (!player.connection) {
-        await player.connect(voiceChannel);
-      }
+      const player = await ensurePlayer(
+        interaction.guildId!,
+        interaction.channel as GuildTextBasedChannel | null,
+      );
+      await ensureConnected(player, voiceChannel);
 
       const fileName = basename(filePath);
       const fileSize = (statSync(filePath).size / (1024 * 1024)).toFixed(2);
@@ -113,23 +115,27 @@ const cmd: SlashCommand = {
         resource.volume.setVolume((player.volume ?? 100) / 100);
       }
 
-      // Reuse existing node (audio player) or create a new one
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let audioPlayer: any;
-      if (player.node) {
-        audioPlayer = player.node;
-      } else {
+      // Reuse existing audio player for this guild, or create and subscribe a new one
+      const guildId = interaction.guildId!;
+      let audioPlayer = localAudioPlayers.get(guildId);
+      if (!audioPlayer) {
         audioPlayer = createAudioPlayer({
           behaviors: { noSubscriber: NoSubscriberBehavior.Play },
         });
-        player.connection!.subscribe(audioPlayer);
-        player.node = audioPlayer;
+        // ziplayer là CJS nên @discordjs/voice của nó resolve ra một declaration khác
+        // với bản ESM ở file này — cùng một class runtime, hai type không tương thích.
+        // Cast đúng sang type mà subscribe() của ziplayer mong đợi.
+        const connection = player.connection!;
+        connection.subscribe(
+          audioPlayer as unknown as Parameters<typeof connection.subscribe>[0],
+        );
+        localAudioPlayers.set(guildId, audioPlayer);
       }
 
       audioPlayer.play(resource);
 
       const embed = new EmbedBuilder()
-        .setColor(0x00ff99)
+        .setColor(COLORS.primary)
         .setTitle("🎵 Đang phát nhạc Local")
         .setDescription(`**${fileName}**`)
         .addFields(
@@ -143,9 +149,9 @@ const cmd: SlashCommand = {
       await interaction.editReply({ embeds: [embed] });
     } catch (error) {
       console.error("🚨 Lỗi phát nhạc local:", error);
-      await interaction.editReply(
-        "❌ Đã xảy ra lỗi khi phát nhạc local. Kiểm tra file có tồn tại và định dạng hợp lệ không.",
-      );
+      await interaction.editReply({
+        embeds: [errorEmbed("Đã xảy ra lỗi khi phát nhạc local. Kiểm tra file có tồn tại và định dạng hợp lệ không.")],
+      });
     }
   },
 };

@@ -1,6 +1,7 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
 import os from "os";
+import { COLORS, errorEmbed } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -28,12 +29,12 @@ const cmd: SlashCommand = {
       const arch = os.arch();
       const nodeVersion = process.version;
 
-      const queueSize = player?.queue.tracks.size ?? 0;
+      const queueSize = player?.queue.size ?? 0;
       const isPlaying = player?.isPlaying ?? false;
       const currentTrack = player?.currentTrack?.title ?? "Không có";
 
       const embed = new EmbedBuilder()
-        .setColor("Blue")
+        .setColor(COLORS.info)
         .setTitle("📊 Thống kê Bot")
         .setThumbnail(client.user!.displayAvatarURL())
         .addFields(
@@ -65,7 +66,7 @@ const cmd: SlashCommand = {
       await interaction.editReply({ embeds: [embed] });
     } catch (error) {
       console.error("Lỗi trong lệnh stats:", error);
-      await interaction.editReply("❌ Đã xảy ra lỗi khi hiển thị thống kê!");
+      await interaction.editReply({ embeds: [errorEmbed("Đã xảy ra lỗi khi hiển thị thống kê!")] });
     }
   },
 };

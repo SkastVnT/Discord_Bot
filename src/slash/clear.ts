@@ -1,5 +1,6 @@
-import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
+import { SlashCommandBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
+import { successEmbed, errorEmbed, warningEmbed } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -13,25 +14,23 @@ const cmd: SlashCommand = {
       const player = getPlayer(interaction.guildId!);
 
       if (!player) {
-        return interaction.editReply("❌ Không có hàng chờ nào!");
+        return interaction.editReply({ embeds: [errorEmbed("Không có hàng chờ nào!")] });
       }
 
-      const queueSize = player.queue.tracks.size;
+      const queueSize = player.queue.size;
 
       if (queueSize === 0) {
-        return interaction.editReply("❌ Hàng chờ đã trống!");
+        return interaction.editReply({ embeds: [warningEmbed("Hàng chờ đã trống!")] });
       }
 
       player.queue.clear();
 
-      const embed = new EmbedBuilder()
-        .setColor("Red")
-        .setDescription(`🗑️ Đã xóa **${queueSize}** bài hát khỏi hàng chờ!`);
-
-      await interaction.editReply({ embeds: [embed] });
+      await interaction.editReply({
+        embeds: [successEmbed(`🗑️ Đã xóa **${queueSize}** bài hát khỏi hàng chờ!`)],
+      });
     } catch (error) {
       console.error("Lỗi trong lệnh clear:", error);
-      await interaction.editReply("❌ Đã xảy ra lỗi khi xóa hàng chờ!");
+      await interaction.editReply({ embeds: [errorEmbed("Đã xảy ra lỗi khi xóa hàng chờ!")] });
     }
   },
 };

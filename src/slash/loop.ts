@@ -1,5 +1,6 @@
-import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
+import { SlashCommandBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
+import { infoEmbed, errorEmbed } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -24,7 +25,7 @@ const cmd: SlashCommand = {
       const player = getPlayer(interaction.guildId!);
 
       if (!player || !player.isPlaying) {
-        return interaction.editReply("❌ Không có bài hát nào đang phát để lặp lại!");
+        return interaction.editReply({ embeds: [errorEmbed("Không có bài hát nào đang phát để lặp lại!")] });
       }
 
       const mode = interaction.options.getString("mode", true);
@@ -51,12 +52,10 @@ const cmd: SlashCommand = {
             ? "🎶 Lặp lại toàn bộ playlist"
             : "🛑 Đã tắt chế độ lặp";
 
-      const embed = new EmbedBuilder().setColor("Random").setDescription(`✅ ${msg}`);
-
-      await interaction.editReply({ embeds: [embed] });
+      await interaction.editReply({ embeds: [infoEmbed(msg)] });
     } catch (error) {
       console.error("Lỗi trong lệnh loop:", error);
-      await interaction.editReply("❌ Đã xảy ra lỗi khi thay đổi chế độ lặp!");
+      await interaction.editReply({ embeds: [errorEmbed("Đã xảy ra lỗi khi thay đổi chế độ lặp!")] });
     }
   },
 };
