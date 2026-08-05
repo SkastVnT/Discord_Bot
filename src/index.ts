@@ -26,7 +26,13 @@ import {
   formatDuration,
   trackThumbnail,
 } from "./utils/embeds.js";
-import { activeSessions, updateLiveLyricsFromExt, startSessionTicker, addLyricsField } from "./slash/livelyrics.js";
+import {
+  activeSessions,
+  updateLiveLyricsFromExt,
+  startSessionTicker,
+  addLyricsField,
+  restickSession,
+} from "./slash/livelyrics.js";
 import { repairTrackMetadata } from "./utils/trackRepair.js";
 import { lyricsPageCache } from "./slash/lyrics.js";
 import type { SlashCommand } from "./types/command.js";
@@ -380,6 +386,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // Secondary reply failed — interaction may have timed out
     }
   }
+});
+
+// ===========================================
+// 📌 Giữ panel đang phát luôn ở cuối channel
+//
+// Discord không cho di chuyển message, nên khi có tin nhắn mới đẩy panel lên trên,
+// cách duy nhất là gửi lại panel ở cuối rồi xoá cái cũ. Dùng event messageCreate
+// thay vì hỏi API "message cuối là cái nào" mỗi vòng lặp — event thì miễn phí.
+client.on(Events.MessageCreate, (message) => {
+  if (!message.guildId) return;
+  const session = activeSessions.get(message.guildId);
+  if (!session?.active || !session.message) return;
+  // Chỉ đẩy khi tin nhắn nằm cùng channel với panel, và không phải chính panel.
+  if (message.channelId !== session.message.channelId) return;
+  if (message.id === session.message.id) return;
+  void restickSession(session, message.id);
 });
 
 // ===========================================

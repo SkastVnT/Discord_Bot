@@ -4,6 +4,7 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   type Message,
+  type GuildTextBasedChannel,
 } from "discord.js";
 import { getPlayer } from "ziplayer";
 import type { Track } from "ziplayer";
@@ -71,6 +72,10 @@ export interface LiveLyricsSession {
   lyricsAttempted: boolean; // đã thử fallback chưa
   /** Nguồn lyrics đang hiển thị, để ghi vào tên field: lrclib / lyricsovh / youtube-captions */
   lyricsSource?: string;
+  /** Đang trong lúc đẩy panel xuống cuối — chặn dội chồng nhau. */
+  resticking?: boolean;
+  /** Lần cuối đẩy panel xuống cuối, để chống dội. */
+  lastRestickAt?: number;
 }
 
 export const activeSessions = new Map<string, LiveLyricsSession>();
@@ -337,6 +342,51 @@ export function renderLyricsField(
 /** Đã chờ quá lâu mà chưa có lyrics → thử nguồn phụ (một lần duy nhất). */
 export function shouldAttemptFallback(session: LiveLyricsSession): boolean {
   return Date.now() - session.createdAt > LYRICS_WAIT_MS && !session.lyricsAttempted;
+}
+
+/**
+ * Tối thiểu bao lâu giữa hai lần đẩy panel xuống cuối.
+ *
+ * Mỗi lần đẩy là một lần xoá + một lần gửi message, nên trong channel đang chat rôm
+ * rả mà đẩy theo từng tin thì vừa tốn rate limit vừa nhấp nháy. 6 giây là đủ để panel
+ * luôn nằm trong tầm mắt mà không giật.
+ */
+const RESTICK_MIN_MS = 6_000;
+
+/**
+ * Đẩy panel đang phát xuống cuối channel.
+ *
+ * Discord không cho di chuyển message, nên cách duy nhất là gửi lại cái mới rồi xoá
+ * cái cũ. Gửi TRƯỚC khi xoá để nếu gửi lỗi thì panel cũ vẫn còn, không mất trắng.
+ */
+export async function restickSession(session: LiveLyricsSession, triggerMessageId: string): Promise<void> {
+  if (!session.active || session.resticking) return;
+  if (!session.message || triggerMessageId === session.message.id) return;
+
+  const now = Date.now();
+  if (now - (session.lastRestickAt ?? 0) < RESTICK_MIN_MS) return;
+
+  const channel = session.message.channel as GuildTextBasedChannel | null;
+  if (!channel?.isTextBased?.()) return;
+
+  session.resticking = true;
+  session.lastRestickAt = now;
+  try {
+    const player = getPlayer(session.guildId);
+    const embed = buildNowPlayingEmbed(session.track, player);
+    addLyricsField(embed, session, player);
+    const rows = player ? buildControlRows(controlStateOf(player)) : (session.controlRows ?? []);
+
+    const previous = session.message;
+    session.message = await channel.send({ embeds: [embed], components: rows });
+    session.embed = embed;
+    session.controlRows = rows;
+    await previous.delete().catch(() => {});
+  } catch (err) {
+    console.warn(`[panel] không đẩy được panel xuống cuối: ${(err as Error).message}`);
+  } finally {
+    session.resticking = false;
+  }
 }
 
 /**
