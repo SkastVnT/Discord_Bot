@@ -6,99 +6,70 @@ import {
   type Message,
 } from "discord.js";
 import { getPlayer } from "ziplayer";
-import type { Player } from "ziplayer";
-import { ensurePlayer, ensureConnected } from "../utils/player.js";
-import { activeSessions, startSessionTicker } from "./livelyrics.js";
+import type { Player, Track } from "ziplayer";
+import { ensurePlayer, ensureConnected, isBusy } from "../utils/player.js";
+import { activeSessions, startSessionTicker, addLyricsField } from "./livelyrics.js";
 import type { LiveLyricsSession } from "./livelyrics.js";
 import {
   buildNowPlayingEmbed,
-  buildControlRow,
+  buildControlRows,
+  controlStateOf,
   sourceColor,
   sourceLabel,
   formatDuration,
   trackAuthor,
+  trackThumbnail,
+  isYouTube,
 } from "../utils/embeds.js";
+import {
+  extractYouTubeListId,
+  isYouTubeMix,
+  buildYouTubeSearchCandidates,
+  extractYouTubeVideoId,
+  fetchYouTubeTitle,
+  looksLikeCompilation,
+} from "../utils/youtube.js";
 import type { SlashCommand } from "../types/command.js";
 
-function extractYouTubeVideoId(input: string): string | null {
-  try {
-    const url = new URL(input);
-    const host = url.hostname.toLowerCase();
+// Các helper URL YouTube đã chuyển sang src/utils/youtube.ts — livelyrics.ts và
+// trackRepair.ts dùng chung, trước đây mỗi file tự có một bản hơi khác nhau.
 
-    if (host === "youtu.be") {
-      return url.pathname.split("/").filter(Boolean)[0] ?? null;
+/**
+ * Ảnh cho embed xác nhận "đã thêm vào hàng chờ".
+ *
+ * YouTube có thumbnail ngang 16:9 nên để ảnh lớn mới đúng khung; nguồn khác thường
+ * là bìa vuông, để ảnh lớn sẽ bị crop nên dùng thumbnail bên phải.
+ */
+/**
+ * Bỏ các video tổng hợp khỏi kết quả playlist/Mix.
+ *
+ * Feed của YouTube Mix với nhạc Việt phần lớn là playlist 1 tiếng, full album,
+ * "TOP 20"... nên nếu đưa hết vào queue thì queue thành một đống playlist chứ
+ * không phải từng bài hát.
+ *
+ * Nếu lọc xong còn dưới 2 bài thì giữ nguyên danh sách gốc: queue ồn còn hơn
+ * queue rỗng, và cũng để không kích hoạt sai nhánh "Mix chỉ có một bài".
+ */
+function dropCompilations(tracks: Track[]): { tracks: Track[]; droppedCount: number } {
+  const kept = tracks.filter((t) => !looksLikeCompilation(t.title));
+  if (kept.length < 2) {
+    console.log(`[play] bỏ qua bước lọc: chỉ còn ${kept.length}/${tracks.length} bài sau khi lọc`);
+    return { tracks, droppedCount: 0 };
+  }
+  const droppedCount = tracks.length - kept.length;
+  if (droppedCount > 0) {
+    console.log(`[play] đã lọc ${droppedCount}/${tracks.length} video tổng hợp khỏi playlist`);
+    for (const t of tracks.filter((x) => looksLikeCompilation(x.title))) {
+      console.log(`[play]   bỏ: ${t.title}`);
     }
-
-    if (host.includes("youtube.com")) {
-      if (url.pathname === "/watch") {
-        return url.searchParams.get("v");
-      }
-      const parts = url.pathname.split("/").filter(Boolean);
-      if ((parts[0] === "shorts" || parts[0] === "live") && parts[1]) {
-        return parts[1];
-      }
-    }
-  } catch {
-    return null;
   }
-  return null;
+  return { tracks: kept, droppedCount };
 }
 
-function extractYouTubeListId(input: string): string | null {
-  try {
-    return new URL(input).searchParams.get("list");
-  } catch {
-    return null;
-  }
-}
-
-/** YouTube Mix/Radio là playlist động, id luôn bắt đầu bằng "RD". */
-function isYouTubeMix(input: string): boolean {
-  return extractYouTubeListId(input)?.toUpperCase().startsWith("RD") ?? false;
-}
-
-function buildYouTubeSearchCandidates(query: string): string[] {
-  const candidates = [query];
-  const videoId = extractYouTubeVideoId(query);
-  if (!videoId) return candidates;
-
-  const listId = extractYouTubeListId(query);
-  const canonicalUrl = listId
-    ? `https://www.youtube.com/watch?v=${videoId}&list=${encodeURIComponent(listId)}`
-    : `https://www.youtube.com/watch?v=${videoId}`;
-  if (!candidates.includes(canonicalUrl)) candidates.push(canonicalUrl);
-
-  // Với Mix, mọi biến thể làm mất `list` sẽ biến playlist động thành một video đơn rồi
-  // để autoplay tự nối bài — đúng triệu chứng "queue toàn nhạc cùng tác giả". Dừng ở đây.
-  if (listId?.toUpperCase().startsWith("RD")) return candidates;
-
-  const shortUrl = `https://youtu.be/${videoId}`;
-  if (!candidates.includes(shortUrl)) candidates.push(shortUrl);
-  // NOTE: bare video ID intentionally NOT added — treated as text search → wrong song
-
-  return candidates;
-}
-
-function isYouTubeUrl(query: string): boolean {
-  try {
-    const host = new URL(query).hostname.toLowerCase();
-    return host === "youtu.be" || host.includes("youtube.com");
-  } catch {
-    return false;
-  }
-}
-
-async function fetchYouTubeTitle(videoId: string): Promise<string | null> {
-  try {
-    const res = await fetch(
-      `https://www.youtube.com/oembed?url=https://youtu.be/${encodeURIComponent(videoId)}&format=json`,
-    );
-    if (!res.ok) return null;
-    const data = (await res.json()) as { title?: string };
-    return data.title ?? null;
-  } catch {
-    return null;
-  }
+function setArtwork(embed: EmbedBuilder, url: string | null | undefined, source?: string): void {
+  if (!url) return;
+  if (isYouTube(source)) embed.setImage(url);
+  else embed.setThumbnail(url);
 }
 
 async function searchWithFallback(
@@ -236,16 +207,19 @@ const cmd: SlashCommand = {
       const embed = new EmbedBuilder();
 
       if (result.playlist && result.tracks.length > 1) {
-        const firstTrack = result.tracks[0]!;
+        const { tracks, droppedCount } = dropCompilations(result.tracks);
+        const firstTrack = tracks[0]!;
 
-        if (!player.isPlaying) {
+        // isBusy tính cả trạng thái pause: nếu chỉ xét isPlaying thì /play lúc đang
+        // tạm dừng sẽ gọi play() và cướp chỗ bài đang dở thay vì thêm vào hàng chờ.
+        if (!isBusy(player)) {
           await player.play(firstTrack);
         } else {
           player.queue.add(firstTrack);
         }
 
-        if (result.tracks.length > 1) {
-          player.queue.addMultiple(result.tracks.slice(1));
+        if (tracks.length > 1) {
+          player.queue.addMultiple(tracks.slice(1));
         }
 
         embed
@@ -254,16 +228,30 @@ const cmd: SlashCommand = {
           .setDescription(
             `**[${result.playlist.name ?? "Mix Playlist"}](${result.playlist.url ?? query})**`,
           )
-          .setThumbnail(result.playlist.thumbnail ?? firstTrack.thumbnail ?? null)
           .addFields(
-            { name: "🎵 Số bài", value: `${result.tracks.length} bài`, inline: true },
+            { name: "🎵 Số bài", value: `${tracks.length} bài`, inline: true },
             { name: "👤 Ca sĩ đầu tiên", value: trackAuthor(firstTrack), inline: true },
           )
           .setFooter({ text: `Yêu cầu bởi ${interaction.user.tag}` });
+
+        // Nói rõ đã bỏ bao nhiêu, không âm thầm cắt bớt.
+        if (droppedCount > 0) {
+          embed.addFields({
+            name: "🧹 Đã lọc",
+            value: `${droppedCount} video tổng hợp (playlist, full album, bản 1 tiếng)`,
+            inline: false,
+          });
+        }
+
+        // Embed này gửi một lần rồi thôi (không kèm lyrics như embed session),
+        // nên dùng ảnh lớn cho đẹp thay vì thumbnail bé.
+        setArtwork(embed, result.playlist.thumbnail ?? trackThumbnail(firstTrack), firstTrack.source);
       } else {
         const track = result.tracks[0]!;
 
-        if (!player.isPlaying) {
+        // isBusy tính cả trạng thái pause: nếu chỉ xét isPlaying thì /play lúc đang
+        // tạm dừng sẽ gọi play() và cướp chỗ bài đang dở thay vì thêm vào hàng chờ.
+        if (!isBusy(player)) {
           await player.play(track);
         } else {
           player.queue.add(track);
@@ -273,13 +261,14 @@ const cmd: SlashCommand = {
           .setColor(sourceColor(track.source))
           .setTitle("🎶 Đã thêm vào hàng chờ")
           .setDescription(`**[${track.title}](${track.url})**`)
-          .setThumbnail(track.thumbnail ?? null)
           .addFields(
             { name: "⏱️ Thời lượng", value: formatDuration(track.duration), inline: true },
             { name: "👤 Ca sĩ", value: trackAuthor(track), inline: true },
             { name: "📡 Nguồn", value: sourceLabel(track.source), inline: true },
           )
           .setFooter({ text: `Yêu cầu bởi ${interaction.user.tag}` });
+
+        setArtwork(embed, trackThumbnail(track), track.source);
       }
 
       await interaction.editReply({ embeds: [embed] });
@@ -288,29 +277,30 @@ const cmd: SlashCommand = {
       const guildId = interaction.guildId!;
       if (!activeSessions.has(guildId) && interaction.channel) {
         const track = result.tracks[0]!;
-        const controlRow = buildControlRow(player.isPaused, !!player.previousTrack);
-        const combinedEmbed = buildNowPlayingEmbed(track, player, interaction.user);
-        combinedEmbed.addFields({ name: "🎤 Lyrics", value: "⏳ Đang tải lyrics..." });
-        combinedEmbed.setFooter({ text: "🎵 /livelyrics off để tắt" });
-
-        const combinedMsg = (await (interaction.channel as import("discord.js").GuildTextBasedChannel).send({
-          embeds: [combinedEmbed],
-          components: [controlRow],
-        })) as Message;
+        const controlRows = buildControlRows(controlStateOf(player));
 
         const session: LiveLyricsSession = {
           active: true,
-          message: combinedMsg,
-          embed: combinedEmbed,
+          message: undefined as unknown as Message, // gán ngay sau khi gửi
+          embed: new EmbedBuilder(),
           track,
           lines: [],
           lastLine: null,
           plainShown: false,
           guildId,
-          controlRow,
+          controlRows,
           createdAt: Date.now(),
           lyricsAttempted: false,
         };
+
+        const combinedEmbed = buildNowPlayingEmbed(track, player, interaction.user);
+        addLyricsField(combinedEmbed, session, player);
+        session.embed = combinedEmbed;
+
+        session.message = (await (interaction.channel as GuildTextBasedChannel).send({
+          embeds: [combinedEmbed],
+          components: controlRows,
+        })) as Message;
 
         startSessionTicker(session);
 

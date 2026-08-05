@@ -1,6 +1,7 @@
 import { SlashCommandBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
-import { buildNowPlayingEmbed, warningEmbed, errorEmbed, successEmbed } from "../utils/embeds.js";
+import { buildNowPlayingEmbed, errorEmbed, successEmbed } from "../utils/embeds.js";
+import { hasActiveTrack } from "../utils/player.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -13,7 +14,7 @@ const cmd: SlashCommand = {
     try {
       const player = getPlayer(interaction.guildId!);
 
-      if (!player?.isPlaying) {
+      if (!hasActiveTrack(player)) {
         return interaction.editReply({
           embeds: [errorEmbed("Không có bài hát nào để bỏ qua!")],
         });
@@ -24,8 +25,11 @@ const cmd: SlashCommand = {
       const next = player.currentTrack;
 
       if (next) {
-        const embed = buildNowPlayingEmbed(next, player, interaction.user);
-        embed.setDescription(`⏭️ Đã bỏ qua: **${skipped.title}**`);
+        // Dùng `note` chứ không setDescription: thanh tiến trình nằm trong description,
+        // ghi đè lên là mất thanh.
+        const embed = buildNowPlayingEmbed(next, player, interaction.user, {
+          note: `⏭️ Đã bỏ qua: **${skipped.title}**`,
+        });
         await interaction.editReply({ embeds: [embed] });
       } else {
         await interaction.editReply({

@@ -4,17 +4,22 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   type Message,
+  type GuildTextBasedChannel,
 } from "discord.js";
 import { getPlayer } from "ziplayer";
 import type { Track } from "ziplayer";
 import {
   COLORS,
   buildNowPlayingEmbed,
-  buildControlRow,
+  buildControlRows,
+  controlStateOf,
   successEmbed,
   warningEmbed,
   errorEmbed,
+  type RequesterLike,
 } from "../utils/embeds.js";
+import { extractYouTubeVideoId } from "../utils/youtube.js";
+import { hasActiveTrack } from "../utils/player.js";
 import type { SlashCommand } from "../types/command.js";
 
 export interface TimedLine {
@@ -59,12 +64,18 @@ export interface LiveLyricsSession {
   lastLine: string | null;
   plainShown: boolean;
   guildId: string;
-  controlRow?: ActionRowBuilder<ButtonBuilder>;
+  /** Hai hàng nút (điều khiển phát + chế độ/âm lượng). */
+  controlRows?: ActionRowBuilder<ButtonBuilder>[];
   progressInterval?: ReturnType<typeof setInterval>;
   lyricsInterval?: ReturnType<typeof setInterval>;
-  checkInterval?: ReturnType<typeof setInterval>;
   createdAt: number;
   lyricsAttempted: boolean; // đã thử fallback chưa
+  /** Nguồn lyrics đang hiển thị, để ghi vào tên field: lrclib / lyricsovh / youtube-captions */
+  lyricsSource?: string;
+  /** Đang trong lúc đẩy panel xuống cuối — chặn dội chồng nhau. */
+  resticking?: boolean;
+  /** Lần cuối đẩy panel xuống cuối, để chống dội. */
+  lastRestickAt?: number;
 }
 
 export const activeSessions = new Map<string, LiveLyricsSession>();
@@ -91,15 +102,6 @@ const FULL_REFRESH_MS = 5_000;
 const LYRICS_LEAD_MS = TICK_MS / 2 + 200;
 
 // --------------- Fallback lyrics helpers ---------------
-
-function extractVideoIdFromUrl(url: string): string | null {
-  try {
-    const u = new URL(url);
-    if (u.hostname === "youtu.be") return u.pathname.slice(1);
-    if (u.hostname.includes("youtube.com")) return u.searchParams.get("v");
-  } catch { /* ignore */ }
-  return null;
-}
 
 async function fetchYouTubeCaptions(videoId: string): Promise<TimedLine[] | null> {
   for (const lang of ["vi", "en"]) {
@@ -147,12 +149,13 @@ export async function attemptFallbackLyrics(session: LiveLyricsSession): Promise
   const { track } = session;
   console.log(`[lyrics] chưa có lyrics sau ${LYRICS_WAIT_MS / 1000}s → thử YouTube captions: ${track.title}`);
 
-  const videoId = extractVideoIdFromUrl(track.url);
+  const videoId = extractYouTubeVideoId(track.url);
   if (videoId) {
     const captions = await fetchYouTubeCaptions(videoId);
     if (captions?.length) {
       session.timedLines = captions;
       session.lines = captions.map(l => l.text);
+      session.lyricsSource = "youtube-captions";
       console.log(`[lyrics] selected synced=true source=youtube-captions parsedLines=${captions.length}`);
       await pushLyricsToEmbed(session);
       return;
@@ -200,11 +203,11 @@ async function pushLyricsToEmbed(session: LiveLyricsSession): Promise<void> {
     const player = getPlayer(session.guildId);
     if (!player || !session.message) return;
     const freshEmbed = buildNowPlayingEmbed(session.track, player);
-    freshEmbed.addFields({ name: "🎤 Lyrics", value: renderLyricsField(session, player) });
-    freshEmbed.setFooter({ text: "🎵 /livelyrics off để tắt" });
+    addLyricsField(freshEmbed, session, player);
     session.embed = freshEmbed;
-    const components = session.controlRow ? [session.controlRow] : [];
-    await session.message.edit({ embeds: [freshEmbed], components }).catch(() => {});
+    await session.message
+      .edit({ embeds: [freshEmbed], components: session.controlRows ?? [] })
+      .catch(() => {});
   } catch { /* ignore */ }
 }
 
@@ -218,21 +221,34 @@ export function currentLineIndex(timedLines: TimedLine[], positionMs: number): n
   return idx;
 }
 
+/** Số dòng hiện thêm ở trước và sau dòng đang hát. */
+const LYRICS_WINDOW = 2;
+
+/** Cắt dòng quá dài để bớt wrap — wrap làm chiều cao embed nhảy mỗi lần đổi dòng. */
+const LYRICS_LINE_MAX = 72;
+
+function clip(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}
+
+/**
+ * Cửa sổ lyrics chạy theo nhạc.
+ *
+ * Dòng đang hát in đậm có mũi tên; các dòng quanh dùng subtext `-#` của Discord
+ * (chữ nhỏ và mờ đi thật) nên mắt bắt ngay được dòng cần đọc mà vẫn thấy trước
+ * câu tiếp theo.
+ */
 export function buildTimedCaptionsDisplay(timedLines: TimedLine[], positionMs: number): string {
   const currentIdx = currentLineIndex(timedLines, positionMs);
-  // Show 2 lines before + current + 2 lines after
-  const start = Math.max(0, currentIdx - 2);
-  const end = Math.min(timedLines.length - 1, currentIdx + 2);
-  let display = "";
+  const start = Math.max(0, currentIdx - LYRICS_WINDOW);
+  const end = Math.min(timedLines.length - 1, currentIdx + LYRICS_WINDOW);
+
+  const out: string[] = [];
   for (let i = start; i <= end; i++) {
-    const line = timedLines[i].text;
-    if (i === currentIdx) {
-      display += `┃ **➤ ${line}**\n`;
-    } else {
-      display += `┃ *${line}*\n`;
-    }
+    const line = clip(timedLines[i]!.text, LYRICS_LINE_MAX);
+    out.push(i === currentIdx ? `▸ **${line}**` : `-# ${line}`);
   }
-  return display.trim();
+  return out.join("\n");
 }
 
 export function buildLyricsDisplay(lines: string[], timedOut = false, isSearching = false): string {
@@ -277,8 +293,31 @@ function fitLines(lines: string[], reserved = 0): string {
  * là bot hỏng, trong khi thật ra nguồn không hề có timestamp.
  */
 export function buildPlainLyricsBlock(lines: string[]): string {
-  const note = "📄 *Lời thường — nguồn không có timestamp nên không chạy theo nhạc*";
-  return `${note}\n${fitLines(lines, note.length + 1)}`;
+  const note = "-# 📄 Nguồn không có timestamp nên lời không chạy theo nhạc";
+  const clipped = lines.map((l) => clip(l, LYRICS_LINE_MAX));
+  return `${note}\n${fitLines(clipped, note.length + 1)}`;
+}
+
+/** Tên field lyrics, kèm nguồn để biết lời đang lấy từ đâu. */
+export function lyricsFieldName(session: LiveLyricsSession): string {
+  if (!session.lyricsSource) return "🎤 Lyrics";
+  const kind = session.timedLines?.length ? "synced" : "lời thường";
+  return `🎤 Lyrics · ${session.lyricsSource} · ${kind}`;
+}
+
+/**
+ * Gắn field lyrics vào embed. Gom lại một chỗ vì trước đây cùng hai dòng
+ * `addFields({ name: "🎤 Lyrics", value: ... })` bị lặp ở 5 nơi và đã có lần lệch nhau.
+ */
+export function addLyricsField(
+  embed: EmbedBuilder,
+  session: LiveLyricsSession,
+  player: ReturnType<typeof getPlayer>,
+): EmbedBuilder {
+  return embed.addFields({
+    name: lyricsFieldName(session),
+    value: renderLyricsField(session, player),
+  });
 }
 
 /** Chọn đúng cách hiển thị theo dữ liệu lyrics mà session đang có. */
@@ -306,6 +345,51 @@ export function shouldAttemptFallback(session: LiveLyricsSession): boolean {
 }
 
 /**
+ * Tối thiểu bao lâu giữa hai lần đẩy panel xuống cuối.
+ *
+ * Mỗi lần đẩy là một lần xoá + một lần gửi message, nên trong channel đang chat rôm
+ * rả mà đẩy theo từng tin thì vừa tốn rate limit vừa nhấp nháy. 6 giây là đủ để panel
+ * luôn nằm trong tầm mắt mà không giật.
+ */
+const RESTICK_MIN_MS = 6_000;
+
+/**
+ * Đẩy panel đang phát xuống cuối channel.
+ *
+ * Discord không cho di chuyển message, nên cách duy nhất là gửi lại cái mới rồi xoá
+ * cái cũ. Gửi TRƯỚC khi xoá để nếu gửi lỗi thì panel cũ vẫn còn, không mất trắng.
+ */
+export async function restickSession(session: LiveLyricsSession, triggerMessageId: string): Promise<void> {
+  if (!session.active || session.resticking) return;
+  if (!session.message || triggerMessageId === session.message.id) return;
+
+  const now = Date.now();
+  if (now - (session.lastRestickAt ?? 0) < RESTICK_MIN_MS) return;
+
+  const channel = session.message.channel as GuildTextBasedChannel | null;
+  if (!channel?.isTextBased?.()) return;
+
+  session.resticking = true;
+  session.lastRestickAt = now;
+  try {
+    const player = getPlayer(session.guildId);
+    const embed = buildNowPlayingEmbed(session.track, player);
+    addLyricsField(embed, session, player);
+    const rows = player ? buildControlRows(controlStateOf(player)) : (session.controlRows ?? []);
+
+    const previous = session.message;
+    session.message = await channel.send({ embeds: [embed], components: rows });
+    session.embed = embed;
+    session.controlRows = rows;
+    await previous.delete().catch(() => {});
+  } catch (err) {
+    console.warn(`[panel] không đẩy được panel xuống cuối: ${(err as Error).message}`);
+  } finally {
+    session.resticking = false;
+  }
+}
+
+/**
  * Timer duy nhất của một session, thay cho 3 bản copy-paste trước đây ở
  * index.ts, play.ts và livelyrics.ts.
  *
@@ -319,12 +403,20 @@ export function startSessionTicker(session: LiveLyricsSession): void {
 
   let lastLineIdx = -1;
   let lastFullRefresh = 0;
+  let lastPaused: boolean | null = null;
 
   session.progressInterval = setInterval(() => {
     void (async () => {
       try {
         const player = getPlayer(session.guildId);
-        if (!player?.isPlaying) {
+
+        // Dừng ticker CHỈ khi hết nhạc thật.
+        //
+        // Tuyệt đối không dùng `!player.isPlaying` làm điều kiện dừng: isPlaying của
+        // ziplayer là `status === Playing || Buffering`, nên lúc pause nó trả false.
+        // Dùng nó ở đây thì ngay lần bấm pause đầu tiên ticker sẽ tự xoá mình và
+        // resume cũng không sống lại — lyrics đứng vĩnh viễn.
+        if (!session.active || !player || !player.currentTrack) {
           if (session.progressInterval) clearInterval(session.progressInterval);
           return;
         }
@@ -333,7 +425,15 @@ export function startSessionTicker(session: LiveLyricsSession): void {
           attemptFallbackLyrics(session).catch(() => {}); // fire-and-forget
         }
 
-        let lineChanged = false;
+        // Đang pause thì vị trí phát đứng yên, không có gì mới để vẽ. Chỉ vẽ lại
+        // đúng một lần lúc trạng thái pause đổi, để icon nút và embed khớp nhau,
+        // rồi im lặng — nếu không sẽ gọi API mỗi 5s suốt thời gian pause.
+        const paused = player.isPaused;
+        const pauseChanged = paused !== lastPaused;
+        lastPaused = paused;
+        if (paused && !pauseChanged) return;
+
+        let lineChanged = pauseChanged;
         if (session.timedLines?.length) {
           const idx = currentLineIndex(
             session.timedLines,
@@ -350,13 +450,12 @@ export function startSessionTicker(session: LiveLyricsSession): void {
         lastFullRefresh = now;
 
         const freshEmbed = buildNowPlayingEmbed(session.track, player);
-        freshEmbed.addFields({ name: "🎤 Lyrics", value: renderLyricsField(session, player) });
-        freshEmbed.setFooter({ text: "🎵 /livelyrics off để tắt" });
-        // Cập nhật luôn nút điều khiển để icon pause/prev khớp trạng thái thật.
-        const freshRow = buildControlRow(player.isPaused, !!player.previousTrack);
-        session.controlRow = freshRow;
+        addLyricsField(freshEmbed, session, player);
+        // Cập nhật luôn nút để pause/loop/volume khớp trạng thái thật của player.
+        const freshRows = buildControlRows(controlStateOf(player));
+        session.controlRows = freshRows;
         session.embed = freshEmbed;
-        await session.message.edit({ embeds: [freshEmbed], components: [freshRow] }).catch(() => {});
+        await session.message.edit({ embeds: [freshEmbed], components: freshRows }).catch(() => {});
       } catch {
         // ignore
       }
@@ -365,15 +464,12 @@ export function startSessionTicker(session: LiveLyricsSession): void {
 }
 
 function buildSessionEmbed(
-  track: Track,
+  session: LiveLyricsSession,
   player: ReturnType<typeof getPlayer>,
-  lines: string[],
-  requester?: { tag?: string; username?: string; displayAvatarURL?(opts?: { size?: number }): string } | null,
+  requester?: RequesterLike | null,
 ): EmbedBuilder {
-  const embed = buildNowPlayingEmbed(track, player, requester ?? null);
-  embed.addFields({ name: "🎤 Lyrics", value: buildLyricsDisplay(lines) });
-  embed.setFooter({ text: "🎵 /livelyrics off để tắt" });
-  return embed;
+  const embed = buildNowPlayingEmbed(session.track, player, requester ?? null);
+  return addLyricsField(embed, session, player);
 }
 
 export function updateLiveLyricsFromExt(
@@ -400,6 +496,7 @@ export function updateLiveLyricsFromExt(
       session.timedLines = timed;
       session.lines = timed.map((l) => l.text);
       session.lyricsAttempted = true;
+      session.lyricsSource = lyricsPayload.provider ?? "lrclib";
       console.log(
         `[lyrics] selected synced=true source=${lyricsPayload.provider ?? "?"} parsedLines=${timed.length}`,
       );
@@ -427,6 +524,7 @@ export function updateLiveLyricsFromExt(
     session.plainShown = true;
     session.lines = lines;
     session.lastLine = lines[lines.length - 1] ?? null;
+    session.lyricsSource = lyricsPayload.provider ?? "lrclib";
     console.log(
       `[lyrics] selected synced=false source=${lyricsPayload.provider ?? "?"} (lời thường, không có timestamp)`,
     );
@@ -435,10 +533,11 @@ export function updateLiveLyricsFromExt(
   }
 
   const currentPlayer = getPlayer(guildId);
-  const freshEmbed = buildSessionEmbed(session.track, currentPlayer, session.lines);
+  const freshEmbed = buildSessionEmbed(session, currentPlayer);
   session.embed = freshEmbed;
-  const components = session.controlRow ? [session.controlRow] : [];
-  session.message.edit({ embeds: [freshEmbed], components }).catch(() => {});
+  session.message
+    .edit({ embeds: [freshEmbed], components: session.controlRows ?? [] })
+    .catch(() => {});
 }
 
 const cmd: SlashCommand = {
@@ -459,7 +558,7 @@ const cmd: SlashCommand = {
     const player = getPlayer(interaction.guildId!);
     const action = interaction.options.getString("action") ?? "on";
 
-    if (!player?.isPlaying) {
+    if (!hasActiveTrack(player)) {
       return interaction.editReply({
         embeds: [errorEmbed("Không có bài hát nào đang phát!")],
       });
@@ -473,7 +572,6 @@ const cmd: SlashCommand = {
         session.active = false;
         if (session.lyricsInterval) clearInterval(session.lyricsInterval);
         if (session.progressInterval) clearInterval(session.progressInterval);
-        if (session.checkInterval) clearInterval(session.checkInterval);
         activeSessions.delete(guildId);
         return interaction.editReply({ embeds: [successEmbed("Đã tắt live lyrics!")] });
       }
@@ -487,57 +585,43 @@ const cmd: SlashCommand = {
     }
 
     const track = player.currentTrack!;
-    const controlRow = buildControlRow(player.isPaused, !!player.previousTrack);
-    const embed = buildSessionEmbed(track, player, [], interaction.user);
+    const controlRows = buildControlRows(controlStateOf(player));
 
-    const message = (await interaction.editReply({
-      embeds: [embed],
-      components: [controlRow],
-    })) as Message;
-
+    // Dựng session trước rồi mới render, để embed đi qua đúng một đường
+    // hiển thị lyrics (addLyricsField) thay vì tự lắp tay riêng ở đây.
     const session: LiveLyricsSession = {
       active: true,
-      message,
-      embed,
+      message: undefined as unknown as Message, // gán ngay bên dưới sau khi có reply
+      embed: new EmbedBuilder(),
       track,
       lines: [],
       lastLine: null,
       plainShown: false,
       guildId,
-      controlRow,
+      controlRows,
       createdAt: Date.now(),
       lyricsAttempted: false,
     };
+
+    const embed = buildSessionEmbed(session, player, interaction.user);
+    session.embed = embed;
+
+    session.message = (await interaction.editReply({
+      embeds: [embed],
+      components: controlRows,
+    })) as Message;
+
     activeSessions.set(guildId, session);
 
     startSessionTicker(session);
 
-    const checkInterval = setInterval(async () => {
-      const currentSession = activeSessions.get(guildId);
-      if (!currentSession?.active) {
-        clearInterval(checkInterval);
-        return;
-      }
-
-      const currentPlayer = getPlayer(guildId);
-      if (!currentPlayer?.isPlaying) {
-        if (currentSession.lyricsInterval) clearInterval(currentSession.lyricsInterval);
-        if (currentSession.progressInterval) clearInterval(currentSession.progressInterval);
-
-        const stoppedEmbed = new EmbedBuilder()
-          .setColor(COLORS.neutral)
-          .setTitle("⏹️ Đã dừng phát nhạc")
-          .setDescription("Live lyrics đã tắt tự động vì hết nhạc.")
-          .setTimestamp();
-        await currentSession.message
-          .edit({ embeds: [stoppedEmbed], components: [] })
-          .catch(() => {});
-        activeSessions.delete(guildId);
-        clearInterval(checkInterval);
-      }
-    }, 3000);
-
-    session.checkInterval = checkInterval;
+    // KHÔNG có vòng kiểm tra "hết nhạc" ở đây nữa.
+    //
+    // Bản cũ chạy mỗi 3s và dùng `!player.isPlaying` để dọn session — nhưng isPlaying
+    // là false lúc pause, nên chỉ cần tạm dừng quá 3 giây là cả session bị xoá và
+    // embed bị thay bằng "Đã dừng phát nhạc" dù nhạc vẫn còn nguyên trong queue.
+    // Việc dọn dẹp đã có sẵn ở event queueEnd và playerDestroy trong index.ts,
+    // hai event đó mới phản ánh đúng lúc nhạc thật sự kết thúc.
   },
 };
 

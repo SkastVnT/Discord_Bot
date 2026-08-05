@@ -1,6 +1,7 @@
 import { SlashCommandBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
-import { infoEmbed, errorEmbed } from "../utils/embeds.js";
+import { infoEmbed, errorEmbed, trackThumbnail } from "../utils/embeds.js";
+import { hasActiveTrack } from "../utils/player.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -13,7 +14,7 @@ const cmd: SlashCommand = {
     try {
       const player = getPlayer(interaction.guildId!);
 
-      if (!player?.isPlaying) {
+      if (!hasActiveTrack(player)) {
         return interaction.editReply({ embeds: [errorEmbed("Không có bài hát nào đang phát!")] });
       }
 
@@ -25,7 +26,7 @@ const cmd: SlashCommand = {
       await interaction.editReply({
         embeds: [
           infoEmbed(`🔄 Đã khởi động lại: **${track.title}**`)
-            .setThumbnail(track.thumbnail ?? null),
+            .setThumbnail(trackThumbnail(track)),
         ],
       });
     } catch (error) {
