@@ -1,6 +1,6 @@
 import { SlashCommandBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
-import { buildNowPlayingEmbed, buildControlRow, errorEmbed } from "../utils/embeds.js";
+import { buildNowPlayingEmbed, buildControlRows, controlStateOf, errorEmbed } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -27,9 +27,9 @@ const cmd: SlashCommand = {
       }
 
       const embed = buildNowPlayingEmbed(track, player, interaction.user);
-      const controlRow = buildControlRow(player.isPaused, !!player.previousTrack);
+      const controlRows = buildControlRows(controlStateOf(player));
 
-      await interaction.editReply({ embeds: [embed], components: [controlRow] });
+      await interaction.editReply({ embeds: [embed], components: controlRows });
     } catch (error) {
       console.error("Lỗi trong lệnh info:", error);
       await interaction.editReply({

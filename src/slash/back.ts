@@ -1,6 +1,13 @@
 import { SlashCommandBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
-import { successEmbed, errorEmbed, warningEmbed } from "../utils/embeds.js";
+import {
+  successEmbed,
+  errorEmbed,
+  warningEmbed,
+  buildNowPlayingEmbed,
+  buildControlRows,
+  controlStateOf,
+} from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -24,6 +31,18 @@ const cmd: SlashCommand = {
       if (!success) {
         return interaction.editReply({
           embeds: [warningEmbed("Không có bài hát trước đó trong lịch sử!")],
+        });
+      }
+
+      // Hiện luôn bài đang phát cho khớp cách /skip trả lời, thay vì chỉ một câu thông báo.
+      const track = player.currentTrack;
+      if (track) {
+        const embed = buildNowPlayingEmbed(track, player, interaction.user, {
+          note: "⏮️ Đã quay lại bài trước",
+        });
+        return interaction.editReply({
+          embeds: [embed],
+          components: buildControlRows(controlStateOf(player)),
         });
       }
 

@@ -9,8 +9,24 @@ import { Routes } from "discord.js";
 import { PlayerManager, getPlayer } from "ziplayer";
 import { YouTubePlugin } from "@ziplayer/plugin";
 import { YTexec } from "@ziplayer/ytexecplug";
-import { buildControlRow, buildQueuePageRow, buildLyricsPageRow, buildNowPlayingEmbed, COLORS, errorEmbed, formatDuration } from "./utils/embeds.js";
-import { activeSessions, updateLiveLyricsFromExt, startSessionTicker } from "./slash/livelyrics.js";
+import {
+  buildControlRows,
+  controlStateOf,
+  CONTROL_BUTTON_IDS,
+  buildQueuePageRow,
+  buildLyricsPageRow,
+  buildNowPlayingEmbed,
+  readLoopMode,
+  nextLoopMode,
+  loopLabel,
+  VOLUME_STEP,
+  VOLUME_MAX,
+  COLORS,
+  errorEmbed,
+  formatDuration,
+} from "./utils/embeds.js";
+import { activeSessions, updateLiveLyricsFromExt, startSessionTicker, addLyricsField } from "./slash/livelyrics.js";
+import { repairTrackMetadata } from "./utils/trackRepair.js";
 import { lyricsPageCache } from "./slash/lyrics.js";
 import type { SlashCommand } from "./types/command.js";
 
@@ -58,6 +74,9 @@ const ytbplg = new YouTubePlugin({
 // Mỗi player tự mang instance riêng, tạo trong src/utils/player.ts.
 const playerManager = new PlayerManager({
   plugins: [ytbplg],
+  // Vá duration/author bị thiếu ngay trước khi lấy stream. Track từ playlist hoặc
+  // Mix feed có duration = NaN vì plugin parse "4:20" bằng Number() — xem trackRepair.ts.
+  trackMiddleware: [repairTrackMetadata],
 });
 
 // ===========================================
@@ -222,8 +241,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    // Music control buttons
-    if (["ctrl_pause", "ctrl_skip", "ctrl_prev", "ctrl_stop"].includes(customId)) {
+    // Music control buttons — 2 hàng, 8 nút
+    if (CONTROL_BUTTON_IDS.includes(customId)) {
       const player = getPlayer(guildId);
       if (!player) {
         await interaction.reply({ embeds: [errorEmbed("Bot không đang phát nhạc!")], flags: MessageFlags.Ephemeral });
@@ -237,6 +256,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
           await player.skip();
         } else if (customId === "ctrl_prev") {
           await player.previous();
+        } else if (customId === "ctrl_loop") {
+          // readLoopMode() chỉ đọc; loop(mode) mới là set.
+          const mode = nextLoopMode(readLoopMode(player));
+          player.loop(mode);
+          console.log(`🔁 [${guildId}] Lặp: ${loopLabel(mode)}`);
+        } else if (customId === "ctrl_shuffle") {
+          player.shuffle();
+          console.log(`🔀 [${guildId}] Đã trộn ${player.queue.size} bài trong hàng chờ`);
+        } else if (customId === "ctrl_vol_down" || customId === "ctrl_vol_up") {
+          const delta = customId === "ctrl_vol_up" ? VOLUME_STEP : -VOLUME_STEP;
+          const next = Math.min(VOLUME_MAX, Math.max(0, (player.volume ?? VOLUME_MAX) + delta));
+          player.setVolume(next);
+          console.log(`🔊 [${guildId}] Âm lượng: ${next}%`);
         } else if (customId === "ctrl_stop") {
           player.stop();
           player.queue.clear();
@@ -246,10 +278,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
           return;
         }
-        const newRow = buildControlRow(player.isPaused, !!player.previousTrack);
+        const newRows = buildControlRows(controlStateOf(player));
         const session = activeSessions.get(guildId);
-        if (session) session.controlRow = newRow;
-        await interaction.editReply({ components: [newRow] });
+        if (session) session.controlRows = newRows;
+
+        // Vẽ lại cả embed chứ không chỉ hàng nút: âm lượng và chế độ lặp hiện ngay
+        // trong embed, nếu chỉ đổi nút thì hai bên sẽ nói hai điều khác nhau.
+        const track = player.currentTrack;
+        if (session && track) {
+          session.track = track;
+          const embed = buildNowPlayingEmbed(track, player);
+          addLyricsField(embed, session, player);
+          session.embed = embed;
+          await interaction.editReply({ embeds: [embed], components: newRows });
+        } else {
+          await interaction.editReply({ components: newRows });
+        }
       } catch (err) {
         console.error(`Button error [${customId}]:`, err);
       }
@@ -363,13 +407,13 @@ playerManager.on("trackStart", async (player, track) => {
     session.track = track;
     session.createdAt = Date.now();
     session.lyricsAttempted = false;
+    session.lyricsSource = undefined;
 
     const newEmbed = buildNowPlayingEmbed(track, player);
-    newEmbed.addFields({ name: "\ud83c\udfa4 Lyrics", value: "\u23f3 \u0110ang t\u1ea3i lyrics t\u1eeb lyricsExt..." });
-    newEmbed.setFooter({ text: "\ud83c\udfb5 /livelyrics off \u0111\u1ec3 t\u1eaft" });
-    const controlRow = buildControlRow(player.isPaused, !!player.previousTrack);
-    session.controlRow = controlRow;
-    const newMessage = await channel.send({ embeds: [newEmbed], components: [controlRow] });
+    addLyricsField(newEmbed, session, player);
+    const controlRows = buildControlRows(controlStateOf(player));
+    session.controlRows = controlRows;
+    const newMessage = await channel.send({ embeds: [newEmbed], components: controlRows });
     session.embed = newEmbed;
     session.message = newMessage;
 
