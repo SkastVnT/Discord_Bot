@@ -1,6 +1,6 @@
 import { SlashCommandBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
-import { successEmbed, errorEmbed } from "../utils/embeds.js";
+import { successEmbed, errorEmbed, trackThumbnail } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -39,7 +39,7 @@ const cmd: SlashCommand = {
       await interaction.editReply({
         embeds: [
           successEmbed(`Đã xóa: **${removedTrack.title}** khỏi vị trí **#${position + 1}**`)
-            .setThumbnail(removedTrack.thumbnail ?? null),
+            .setThumbnail(trackThumbnail(removedTrack)),
         ],
       });
     } catch (error) {

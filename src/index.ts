@@ -24,6 +24,7 @@ import {
   COLORS,
   errorEmbed,
   formatDuration,
+  trackThumbnail,
 } from "./utils/embeds.js";
 import { activeSessions, updateLiveLyricsFromExt, startSessionTicker, addLyricsField } from "./slash/livelyrics.js";
 import { repairTrackMetadata } from "./utils/trackRepair.js";
@@ -324,7 +325,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setDescription(
           `\ud83c\udfb6 **\u0110ang ph\u00e1t:** ${current ? `\`[${formatDuration(current.duration)}]\` ${current.title}` : "*Kh\u00f4ng c\u00f3*"}\n\n${queueStr || "*Tr\u1ed1ng!*"}`,
         )
-        .setThumbnail(current?.thumbnail ?? null)
+        .setThumbnail(current ? trackThumbnail(current) : null)
         .setFooter({ text: `${tracks.length} b\u00e0i trong h\u00e0ng ch\u1edd` });
       await interaction.editReply({ embeds: [queueEmbed], components: [buildQueuePageRow(page, totalPages)] });
       return;

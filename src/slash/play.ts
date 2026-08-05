@@ -18,6 +18,7 @@ import {
   sourceLabel,
   formatDuration,
   trackAuthor,
+  trackThumbnail,
   isYouTube,
 } from "../utils/embeds.js";
 import {
@@ -38,7 +39,7 @@ import type { SlashCommand } from "../types/command.js";
  * YouTube có thumbnail ngang 16:9 nên để ảnh lớn mới đúng khung; nguồn khác thường
  * là bìa vuông, để ảnh lớn sẽ bị crop nên dùng thumbnail bên phải.
  */
-function setArtwork(embed: EmbedBuilder, url: string | undefined, source?: string): void {
+function setArtwork(embed: EmbedBuilder, url: string | null | undefined, source?: string): void {
   if (!url) return;
   if (isYouTube(source)) embed.setImage(url);
   else embed.setThumbnail(url);
@@ -205,7 +206,7 @@ const cmd: SlashCommand = {
 
         // Embed này gửi một lần rồi thôi (không kèm lyrics như embed session),
         // nên dùng ảnh lớn cho đẹp thay vì thumbnail bé.
-        setArtwork(embed, result.playlist.thumbnail ?? firstTrack.thumbnail, firstTrack.source);
+        setArtwork(embed, result.playlist.thumbnail ?? trackThumbnail(firstTrack), firstTrack.source);
       } else {
         const track = result.tracks[0]!;
 
@@ -226,7 +227,7 @@ const cmd: SlashCommand = {
           )
           .setFooter({ text: `Yêu cầu bởi ${interaction.user.tag}` });
 
-        setArtwork(embed, track.thumbnail, track.source);
+        setArtwork(embed, trackThumbnail(track), track.source);
       }
 
       await interaction.editReply({ embeds: [embed] });

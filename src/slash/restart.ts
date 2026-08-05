@@ -1,6 +1,6 @@
 import { SlashCommandBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
-import { infoEmbed, errorEmbed } from "../utils/embeds.js";
+import { infoEmbed, errorEmbed, trackThumbnail } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const cmd: SlashCommand = {
@@ -25,7 +25,7 @@ const cmd: SlashCommand = {
       await interaction.editReply({
         embeds: [
           infoEmbed(`🔄 Đã khởi động lại: **${track.title}**`)
-            .setThumbnail(track.thumbnail ?? null),
+            .setThumbnail(trackThumbnail(track)),
         ],
       });
     } catch (error) {

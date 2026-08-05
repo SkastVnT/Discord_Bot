@@ -81,6 +81,17 @@ export function buildYouTubeSearchCandidates(query: string): string[] {
   return candidates;
 }
 
+/**
+ * Ảnh thumbnail suy ra từ video ID.
+ *
+ * Track lấy từ playlist/Mix feed nhiều khi không có `thumbnail`, khi đó embed sẽ
+ * trống trơn không ảnh. URL i.ytimg.com là tất định theo video ID nên lấy được
+ * ngay, không tốn request nào.
+ */
+export function youtubeThumbnailUrl(videoId: string): string {
+  return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+}
+
 export async function fetchYouTubeTitle(videoId: string): Promise<string | null> {
   try {
     const res = await fetch(

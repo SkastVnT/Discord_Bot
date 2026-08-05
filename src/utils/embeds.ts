@@ -6,6 +6,7 @@ import {
   type APIEmbedField,
 } from "discord.js";
 import type { Track, Player, LoopMode } from "ziplayer";
+import { extractYouTubeVideoId, youtubeThumbnailUrl } from "./youtube.js";
 
 // ─── Brand Colors ─────────────────────────────────────────────────────────────
 export const COLORS = {
@@ -45,6 +46,18 @@ export function sourceLabel(source?: string): string {
 
 export function isYouTube(source?: string): boolean {
   return !source || source === "youtube" || source === "ytsr";
+}
+
+/**
+ * Ảnh của track, luôn có ảnh với nhạc YouTube.
+ *
+ * Track từ playlist/Mix feed nhiều khi thiếu `thumbnail` khiến embed trống trơn;
+ * với YouTube thì suy ra được từ video ID mà không tốn request.
+ */
+export function trackThumbnail(track: Track): string | null {
+  if (track.thumbnail) return track.thumbnail;
+  const videoId = extractYouTubeVideoId(track.url ?? "");
+  return videoId ? youtubeThumbnailUrl(videoId) : null;
 }
 
 /**
@@ -151,7 +164,7 @@ export function buildNowPlayingEmbed(
     .setTitle(track.title)
     .setURL(track.url)
     .setAuthor({ name: trackAuthor(track, "Unknown Artist") })
-    .setThumbnail(track.thumbnail ?? null);
+    .setThumbnail(trackThumbnail(track));
 
   const isLive = player?.isLive ?? track.isLive ?? false;
   const time = player?.getTime?.();

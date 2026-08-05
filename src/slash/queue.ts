@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
-import { COLORS, buildQueuePageRow, errorEmbed, warningEmbed, formatDuration } from "../utils/embeds.js";
+import { COLORS, buildQueuePageRow, errorEmbed, warningEmbed, formatDuration, trackThumbnail } from "../utils/embeds.js";
 import type { SlashCommand } from "../types/command.js";
 
 const PAGE_SIZE = 10;
@@ -56,7 +56,7 @@ const cmd: SlashCommand = {
           `🎶 **Đang phát:** ${current ? `\`[${formatDuration(current.duration)}]\` ${current.title ?? "Unknown"}` : "*Không có*"}\n\n` +
             `${queueStr || "*Trống!*"}`,
         )
-        .setThumbnail(current?.thumbnail ?? null)
+        .setThumbnail(current ? trackThumbnail(current) : null)
         .setFooter({ text: `${tracks.length} bài trong hàng chờ` });
 
       const components = totalPages > 1 ? [buildQueuePageRow(page, totalPages)] : [];
