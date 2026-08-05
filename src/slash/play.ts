@@ -7,7 +7,7 @@ import {
 } from "discord.js";
 import { getPlayer } from "ziplayer";
 import type { Player } from "ziplayer";
-import { ensurePlayer, ensureConnected } from "../utils/player.js";
+import { ensurePlayer, ensureConnected, isBusy } from "../utils/player.js";
 import { activeSessions, startSessionTicker, addLyricsField } from "./livelyrics.js";
 import type { LiveLyricsSession } from "./livelyrics.js";
 import {
@@ -182,7 +182,9 @@ const cmd: SlashCommand = {
       if (result.playlist && result.tracks.length > 1) {
         const firstTrack = result.tracks[0]!;
 
-        if (!player.isPlaying) {
+        // isBusy tính cả trạng thái pause: nếu chỉ xét isPlaying thì /play lúc đang
+        // tạm dừng sẽ gọi play() và cướp chỗ bài đang dở thay vì thêm vào hàng chờ.
+        if (!isBusy(player)) {
           await player.play(firstTrack);
         } else {
           player.queue.add(firstTrack);
@@ -210,7 +212,9 @@ const cmd: SlashCommand = {
       } else {
         const track = result.tracks[0]!;
 
-        if (!player.isPlaying) {
+        // isBusy tính cả trạng thái pause: nếu chỉ xét isPlaying thì /play lúc đang
+        // tạm dừng sẽ gọi play() và cướp chỗ bài đang dở thay vì thêm vào hàng chờ.
+        if (!isBusy(player)) {
           await player.play(track);
         } else {
           player.queue.add(track);

@@ -1,6 +1,7 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import { getPlayer } from "ziplayer";
 import { COLORS, buildQueuePageRow, errorEmbed, warningEmbed, formatDuration, trackThumbnail } from "../utils/embeds.js";
+import { hasActiveTrack } from "../utils/player.js";
 import type { SlashCommand } from "../types/command.js";
 
 const PAGE_SIZE = 10;
@@ -18,7 +19,7 @@ const cmd: SlashCommand = {
     try {
       const player = getPlayer(interaction.guildId!);
 
-      if (!player?.isPlaying) {
+      if (!hasActiveTrack(player)) {
         return interaction.editReply({
           embeds: [errorEmbed("Không có bài hát nào trong danh sách chờ!")],
         });

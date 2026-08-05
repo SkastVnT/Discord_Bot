@@ -30,7 +30,13 @@ const cmd: SlashCommand = {
       const nodeVersion = process.version;
 
       const queueSize = player?.queue.size ?? 0;
-      const isPlaying = player?.isPlaying ?? false;
+      // Phân biệt ba trạng thái: đang phát / tạm dừng / không có gì.
+      // isPlaying là false lúc pause nên nếu chỉ xét nó thì pause trông như đã tắt.
+      const playState = player?.isPlaying
+        ? "✅ đang phát"
+        : player?.isPaused
+          ? "⏸️ tạm dừng"
+          : "❌ không phát";
       const currentTrack = player?.currentTrack?.title ?? "Không có";
 
       const embed = new EmbedBuilder()
@@ -51,7 +57,7 @@ const cmd: SlashCommand = {
           {
             name: "🎵 Nhạc",
             value:
-              `**Đang phát:** ${isPlaying ? "✅" : "❌"}\n` +
+              `**Trạng thái:** ${playState}\n` +
               `**Bài hiện tại:** ${currentTrack.substring(0, 30)}${currentTrack.length > 30 ? "..." : ""}\n` +
               `**Hàng chờ:** ${queueSize} bài`,
             inline: false,

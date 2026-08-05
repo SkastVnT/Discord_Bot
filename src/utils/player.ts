@@ -48,6 +48,23 @@ export async function ensurePlayer(
   return player;
 }
 
+/**
+ * Có bài nào đang phát HOẶC đang tạm dừng.
+ *
+ * Dùng cái này cho các lệnh thay vì `player.isPlaying`: isPlaying của ziplayer là
+ * `status === Playing || Buffering`, tức là FALSE khi đang pause. Dùng isPlaying
+ * làm điều kiện "không có nhạc" sẽ khiến /skip, /queue, /info… báo là không có bài
+ * nào đang phát trong lúc chỉ đang tạm dừng.
+ */
+export function hasActiveTrack(player?: Player | null): player is Player {
+  return Boolean(player?.currentTrack);
+}
+
+/** Player đang có việc: phát, buffer, hoặc tạm dừng giữa bài. */
+export function isBusy(player?: Player | null): boolean {
+  return Boolean(player && (player.isPlaying || player.isPaused));
+}
+
 /** Nối player vào voice channel nếu chưa nối. */
 export async function ensureConnected(
   player: Player,

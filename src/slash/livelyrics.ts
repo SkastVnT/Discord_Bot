@@ -18,6 +18,7 @@ import {
   type RequesterLike,
 } from "../utils/embeds.js";
 import { extractYouTubeVideoId } from "../utils/youtube.js";
+import { hasActiveTrack } from "../utils/player.js";
 import type { SlashCommand } from "../types/command.js";
 
 export interface TimedLine {
@@ -66,7 +67,6 @@ export interface LiveLyricsSession {
   controlRows?: ActionRowBuilder<ButtonBuilder>[];
   progressInterval?: ReturnType<typeof setInterval>;
   lyricsInterval?: ReturnType<typeof setInterval>;
-  checkInterval?: ReturnType<typeof setInterval>;
   createdAt: number;
   lyricsAttempted: boolean; // đã thử fallback chưa
   /** Nguồn lyrics đang hiển thị, để ghi vào tên field: lrclib / lyricsovh / youtube-captions */
@@ -353,12 +353,20 @@ export function startSessionTicker(session: LiveLyricsSession): void {
 
   let lastLineIdx = -1;
   let lastFullRefresh = 0;
+  let lastPaused: boolean | null = null;
 
   session.progressInterval = setInterval(() => {
     void (async () => {
       try {
         const player = getPlayer(session.guildId);
-        if (!player?.isPlaying) {
+
+        // Dừng ticker CHỈ khi hết nhạc thật.
+        //
+        // Tuyệt đối không dùng `!player.isPlaying` làm điều kiện dừng: isPlaying của
+        // ziplayer là `status === Playing || Buffering`, nên lúc pause nó trả false.
+        // Dùng nó ở đây thì ngay lần bấm pause đầu tiên ticker sẽ tự xoá mình và
+        // resume cũng không sống lại — lyrics đứng vĩnh viễn.
+        if (!session.active || !player || !player.currentTrack) {
           if (session.progressInterval) clearInterval(session.progressInterval);
           return;
         }
@@ -367,7 +375,15 @@ export function startSessionTicker(session: LiveLyricsSession): void {
           attemptFallbackLyrics(session).catch(() => {}); // fire-and-forget
         }
 
-        let lineChanged = false;
+        // Đang pause thì vị trí phát đứng yên, không có gì mới để vẽ. Chỉ vẽ lại
+        // đúng một lần lúc trạng thái pause đổi, để icon nút và embed khớp nhau,
+        // rồi im lặng — nếu không sẽ gọi API mỗi 5s suốt thời gian pause.
+        const paused = player.isPaused;
+        const pauseChanged = paused !== lastPaused;
+        lastPaused = paused;
+        if (paused && !pauseChanged) return;
+
+        let lineChanged = pauseChanged;
         if (session.timedLines?.length) {
           const idx = currentLineIndex(
             session.timedLines,
@@ -492,7 +508,7 @@ const cmd: SlashCommand = {
     const player = getPlayer(interaction.guildId!);
     const action = interaction.options.getString("action") ?? "on";
 
-    if (!player?.isPlaying) {
+    if (!hasActiveTrack(player)) {
       return interaction.editReply({
         embeds: [errorEmbed("Không có bài hát nào đang phát!")],
       });
@@ -506,7 +522,6 @@ const cmd: SlashCommand = {
         session.active = false;
         if (session.lyricsInterval) clearInterval(session.lyricsInterval);
         if (session.progressInterval) clearInterval(session.progressInterval);
-        if (session.checkInterval) clearInterval(session.checkInterval);
         activeSessions.delete(guildId);
         return interaction.editReply({ embeds: [successEmbed("Đã tắt live lyrics!")] });
       }
@@ -550,32 +565,13 @@ const cmd: SlashCommand = {
 
     startSessionTicker(session);
 
-    const checkInterval = setInterval(async () => {
-      const currentSession = activeSessions.get(guildId);
-      if (!currentSession?.active) {
-        clearInterval(checkInterval);
-        return;
-      }
-
-      const currentPlayer = getPlayer(guildId);
-      if (!currentPlayer?.isPlaying) {
-        if (currentSession.lyricsInterval) clearInterval(currentSession.lyricsInterval);
-        if (currentSession.progressInterval) clearInterval(currentSession.progressInterval);
-
-        const stoppedEmbed = new EmbedBuilder()
-          .setColor(COLORS.neutral)
-          .setTitle("⏹️ Đã dừng phát nhạc")
-          .setDescription("Live lyrics đã tắt tự động vì hết nhạc.")
-          .setTimestamp();
-        await currentSession.message
-          .edit({ embeds: [stoppedEmbed], components: [] })
-          .catch(() => {});
-        activeSessions.delete(guildId);
-        clearInterval(checkInterval);
-      }
-    }, 3000);
-
-    session.checkInterval = checkInterval;
+    // KHÔNG có vòng kiểm tra "hết nhạc" ở đây nữa.
+    //
+    // Bản cũ chạy mỗi 3s và dùng `!player.isPlaying` để dọn session — nhưng isPlaying
+    // là false lúc pause, nên chỉ cần tạm dừng quá 3 giây là cả session bị xoá và
+    // embed bị thay bằng "Đã dừng phát nhạc" dù nhạc vẫn còn nguyên trong queue.
+    // Việc dọn dẹp đã có sẵn ở event queueEnd và playerDestroy trong index.ts,
+    // hai event đó mới phản ánh đúng lúc nhạc thật sự kết thúc.
   },
 };
 
