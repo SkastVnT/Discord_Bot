@@ -92,6 +92,54 @@ export function youtubeThumbnailUrl(videoId: string): string {
   return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
 }
 
+// ─── Nhận diện video tổng hợp ─────────────────────────────────────────────────
+// Feed của YouTube Mix (watch_next_feed) với nhạc Việt bị các kênh tổng hợp chiếm
+// gần hết: playlist 1 tiếng, "full album", "TOP 20", bài loop 1 hour... Đưa hết vào
+// queue thì queue thành một đống playlist thay vì từng bài hát.
+
+const COMPILATION_PATTERNS = [
+  /\bplaylist\b/i,
+  /tuy[ểe]n t[ậa]p|t[ổo]ng h[ợo]p/i,
+  /full album|\balbum\b/i,
+  /\bmix\b/i, // "Remix" không khớp vì không có ranh giới từ trước "mix"
+  /\btop\s*\d+/i,
+  /nh[ạa]c\s+(chill|lofi|bu[ồo]n|tr[ẻe]|vi[ệe]t)/i,
+  /\d+\s*(b[àa]i|b[ảa]n)\s*nh[ạa]c/i,
+  /nh[ữu]ng\s+(ca kh[úu]c|b[àa]i|b[ảa]n)/i,
+  /\d+\s*hour|\bhour\b/i,
+  /\bloop\b/i,
+  /\bmashup\b/i,
+];
+
+/**
+ * Bỏ phần không phải tên bài trước khi đếm dấu phân cách.
+ *
+ * Danh sách nghệ sĩ khách mời cũng dùng dấu phẩy — "W/n - SSD ft. (267, Nguyenn,
+ * PAR SG)" có 2 dấu phẩy nhưng là một bài hát. Nếu đếm thẳng thì bài đó bị bỏ oan.
+ */
+function stripFeatures(title: string): string {
+  return title
+    .replace(/\([^)]*\)/g, "")
+    .replace(/\[[^\]]*\]/g, "")
+    .replace(/\b(ft|feat|prod)\b\.?.*$/i, "");
+}
+
+/**
+ * Title trông như video tổng hợp nhiều bài chứ không phải một bài hát.
+ *
+ * Chỉ dựa vào title vì track lấy từ feed không có duration (là NaN) nên không lọc
+ * được theo độ dài. Cố ý thiên về giữ lại: thà lọt một playlist còn hơn bỏ oan bài hát.
+ */
+export function looksLikeCompilation(title: string): boolean {
+  if (!title) return false;
+  if (COMPILATION_PATTERNS.some((re) => re.test(title))) return true;
+
+  const core = stripFeatures(title);
+  const xCount = (core.match(/\s+x\s+/gi) ?? []).length;
+  const commas = (core.match(/,/g) ?? []).length;
+  return xCount >= 2 || commas >= 2;
+}
+
 export async function fetchYouTubeTitle(videoId: string): Promise<string | null> {
   try {
     const res = await fetch(

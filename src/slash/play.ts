@@ -6,7 +6,7 @@ import {
   type Message,
 } from "discord.js";
 import { getPlayer } from "ziplayer";
-import type { Player } from "ziplayer";
+import type { Player, Track } from "ziplayer";
 import { ensurePlayer, ensureConnected, isBusy } from "../utils/player.js";
 import { activeSessions, startSessionTicker, addLyricsField } from "./livelyrics.js";
 import type { LiveLyricsSession } from "./livelyrics.js";
@@ -27,6 +27,7 @@ import {
   buildYouTubeSearchCandidates,
   extractYouTubeVideoId,
   fetchYouTubeTitle,
+  looksLikeCompilation,
 } from "../utils/youtube.js";
 import type { SlashCommand } from "../types/command.js";
 
@@ -39,6 +40,32 @@ import type { SlashCommand } from "../types/command.js";
  * YouTube có thumbnail ngang 16:9 nên để ảnh lớn mới đúng khung; nguồn khác thường
  * là bìa vuông, để ảnh lớn sẽ bị crop nên dùng thumbnail bên phải.
  */
+/**
+ * Bỏ các video tổng hợp khỏi kết quả playlist/Mix.
+ *
+ * Feed của YouTube Mix với nhạc Việt phần lớn là playlist 1 tiếng, full album,
+ * "TOP 20"... nên nếu đưa hết vào queue thì queue thành một đống playlist chứ
+ * không phải từng bài hát.
+ *
+ * Nếu lọc xong còn dưới 2 bài thì giữ nguyên danh sách gốc: queue ồn còn hơn
+ * queue rỗng, và cũng để không kích hoạt sai nhánh "Mix chỉ có một bài".
+ */
+function dropCompilations(tracks: Track[]): { tracks: Track[]; droppedCount: number } {
+  const kept = tracks.filter((t) => !looksLikeCompilation(t.title));
+  if (kept.length < 2) {
+    console.log(`[play] bỏ qua bước lọc: chỉ còn ${kept.length}/${tracks.length} bài sau khi lọc`);
+    return { tracks, droppedCount: 0 };
+  }
+  const droppedCount = tracks.length - kept.length;
+  if (droppedCount > 0) {
+    console.log(`[play] đã lọc ${droppedCount}/${tracks.length} video tổng hợp khỏi playlist`);
+    for (const t of tracks.filter((x) => looksLikeCompilation(x.title))) {
+      console.log(`[play]   bỏ: ${t.title}`);
+    }
+  }
+  return { tracks: kept, droppedCount };
+}
+
 function setArtwork(embed: EmbedBuilder, url: string | null | undefined, source?: string): void {
   if (!url) return;
   if (isYouTube(source)) embed.setImage(url);
@@ -180,7 +207,8 @@ const cmd: SlashCommand = {
       const embed = new EmbedBuilder();
 
       if (result.playlist && result.tracks.length > 1) {
-        const firstTrack = result.tracks[0]!;
+        const { tracks, droppedCount } = dropCompilations(result.tracks);
+        const firstTrack = tracks[0]!;
 
         // isBusy tính cả trạng thái pause: nếu chỉ xét isPlaying thì /play lúc đang
         // tạm dừng sẽ gọi play() và cướp chỗ bài đang dở thay vì thêm vào hàng chờ.
@@ -190,8 +218,8 @@ const cmd: SlashCommand = {
           player.queue.add(firstTrack);
         }
 
-        if (result.tracks.length > 1) {
-          player.queue.addMultiple(result.tracks.slice(1));
+        if (tracks.length > 1) {
+          player.queue.addMultiple(tracks.slice(1));
         }
 
         embed
@@ -201,10 +229,19 @@ const cmd: SlashCommand = {
             `**[${result.playlist.name ?? "Mix Playlist"}](${result.playlist.url ?? query})**`,
           )
           .addFields(
-            { name: "🎵 Số bài", value: `${result.tracks.length} bài`, inline: true },
+            { name: "🎵 Số bài", value: `${tracks.length} bài`, inline: true },
             { name: "👤 Ca sĩ đầu tiên", value: trackAuthor(firstTrack), inline: true },
           )
           .setFooter({ text: `Yêu cầu bởi ${interaction.user.tag}` });
+
+        // Nói rõ đã bỏ bao nhiêu, không âm thầm cắt bớt.
+        if (droppedCount > 0) {
+          embed.addFields({
+            name: "🧹 Đã lọc",
+            value: `${droppedCount} video tổng hợp (playlist, full album, bản 1 tiếng)`,
+            inline: false,
+          });
+        }
 
         // Embed này gửi một lần rồi thôi (không kèm lyrics như embed session),
         // nên dùng ảnh lớn cho đẹp thay vì thumbnail bé.
