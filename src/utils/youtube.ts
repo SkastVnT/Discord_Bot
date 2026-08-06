@@ -2,6 +2,8 @@
 // Trước đây play.ts và livelyrics.ts mỗi file tự có một bản tách video ID riêng,
 // hơi khác nhau về host được chấp nhận — gom lại để không lệch nhau nữa.
 
+import type { ParsedYouTubeUrl } from "../types/playlist.js";
+
 const LONG_HOSTS = ["youtube.com", "www.youtube.com", "music.youtube.com", "m.youtube.com"];
 
 export function extractYouTubeVideoId(input: string): string | null {
@@ -41,11 +43,68 @@ export function isYouTubeMix(input: string): boolean {
 
 export function isYouTubeUrl(input: string): boolean {
   try {
-    const host = new URL(input).hostname.toLowerCase();
+    const url = new URL(input);
+    if (!ALLOWED_PROTOCOLS.includes(url.protocol)) return false;
+    const host = url.hostname.toLowerCase();
     return host === "youtu.be" || LONG_HOSTS.includes(host);
   } catch {
     return false;
   }
+}
+
+const ALLOWED_PROTOCOLS = ["http:", "https:"];
+
+/**
+ * Đọc một URL YouTube thành dạng có cấu trúc.
+ *
+ * So khớp hostname CHÍNH XÁC với allowlist chứ không dùng `includes`, nên các
+ * tên miền giả kiểu `youtube.com.attacker.example` hay `evil.com/youtube.com`
+ * đều bị từ chối. Chỉ nhận http/https — chặn `javascript:` và `file:`.
+ *
+ * Trả `null` khi không phải URL YouTube hợp lệ; chỗ gọi tự quyết định coi đó là
+ * lỗi hay là một câu tìm kiếm bằng chữ.
+ */
+export function parseYouTubeUrl(input: string): ParsedYouTubeUrl | null {
+  const raw = input.trim();
+  if (!raw || raw.length > 2048) return null;
+
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+
+  if (!ALLOWED_PROTOCOLS.includes(url.protocol)) return null;
+
+  const host = url.hostname.toLowerCase();
+  if (host !== "youtu.be" && !LONG_HOSTS.includes(host)) return null;
+
+  const videoId = extractYouTubeVideoId(raw);
+  const listId = extractYouTubeListId(raw);
+
+  if (listId) {
+    const isMix = listId.toUpperCase().startsWith("RD");
+    // Mix cần giữ nguyên cả videoId lẫn listId: bỏ videoId đi thì YouTube không
+    // biết lấy bài nào làm gốc để sinh danh sách.
+    const canonicalUrl = videoId
+      ? `https://www.youtube.com/watch?v=${videoId}&list=${encodeURIComponent(listId)}`
+      : `https://www.youtube.com/playlist?list=${encodeURIComponent(listId)}`;
+
+    return {
+      kind: isMix ? "mix" : videoId ? "video_in_playlist" : "playlist",
+      canonicalUrl,
+      ...(videoId ? { videoId } : {}),
+      listId,
+    };
+  }
+
+  if (!videoId) return null;
+  return {
+    kind: "video",
+    canonicalUrl: `https://www.youtube.com/watch?v=${videoId}`,
+    videoId,
+  };
 }
 
 /**

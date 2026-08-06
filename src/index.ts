@@ -7,7 +7,7 @@ import { Client, Collection, Events, GatewayIntentBits, EmbedBuilder, MessageFla
 import { REST } from "@discordjs/rest";
 import { Routes } from "discord.js";
 import { PlayerManager, getPlayer } from "ziplayer";
-import { YouTubePlugin } from "@ziplayer/plugin";
+import { YouTubePlugin, AttachmentsPlugin } from "@ziplayer/plugin";
 import { YTexec } from "@ziplayer/ytexecplug";
 import {
   buildControlRows,
@@ -35,6 +35,10 @@ import {
 } from "./slash/livelyrics.js";
 import { repairTrackMetadata } from "./utils/trackRepair.js";
 import { lyricsPageCache } from "./slash/lyrics.js";
+import { handlePlaylistInteraction } from "./interactions/playlistUi.js";
+import { autocompletePlaylistName } from "./slash/playlist.js";
+import { connectMongo } from "./db/mongo.js";
+import { checkR2 } from "./services/r2.js";
 import type { SlashCommand } from "./types/command.js";
 
 dotenv.config();
@@ -73,6 +77,12 @@ const ytbplg = new YouTubePlugin({
   fallbackStream: (track) => ytexec.getStream(track),
 });
 
+// AttachmentsPlugin nhận mọi URL HTTPS trỏ tới file audio, nhờ vậy file người dùng
+// upload lên Cloudflare R2 phát được mà không cần viết bộ stream riêng.
+const attachplg = new AttachmentsPlugin({
+  maxFileSize: (Number(process.env.R2_MAX_UPLOAD_MB) || 50) * 1024 * 1024,
+});
+
 // ===========================================
 // 🎧 Player Manager
 // KHÔNG khai extension ở đây: ZiPlayer 0.3.x activate toàn bộ extension mức manager
@@ -80,7 +90,9 @@ const ytbplg = new YouTubePlugin({
 // lyricsExt (extension giữ state theo track/player → lyrics lẫn giữa các server).
 // Mỗi player tự mang instance riêng, tạo trong src/utils/player.ts.
 const playerManager = new PlayerManager({
-  plugins: [ytbplg],
+  // Thứ tự có ý nghĩa: YouTube trước, AttachmentsPlugin sau để nó chỉ nhận những
+  // URL file audio trực tiếp mà YouTube không xử lý (chính là file trên R2).
+  plugins: [ytbplg, attachplg],
   // Vá duration/author bị thiếu ngay trước khi lấy stream. Track từ playlist hoặc
   // Mix feed có duration = NaN vì plugin parse "4:20" bằng Number() — xem trackRepair.ts.
   trackMiddleware: [repairTrackMetadata],
@@ -232,10 +244,27 @@ async function registerCommands(): Promise<void> {
 // 🟢 Client Events
 client.once(Events.ClientReady, async () => {
   console.log(`✅ Đăng nhập thành công: ${client.user!.tag}`);
+  // Không await trước registerCommands: Mongo hỏng không được chặn việc đăng ký lệnh,
+  // và connectMongo() tự nuốt lỗi nên chỉ nhóm /playlist bị ảnh hưởng.
+  void connectMongo();
+  void checkR2();
   if (LOAD_SLASH) await registerCommands();
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
+  // ============================================
+  // 📀 Playlist UI — select menu, nút và modal.
+  // Đặt TRƯỚC khối nút cũ và trả sớm nếu đã xử lý; hàm này tự nhận ra interaction
+  // nào là của nó qua tiền tố customId.
+  if (await handlePlaylistInteraction(interaction)) return;
+
+  // ============================================
+  // 🔎 Autocomplete
+  if (interaction.isAutocomplete()) {
+    if (interaction.commandName === "playlist") await autocompletePlaylistName(interaction);
+    return;
+  }
+
   // ============================================
   // 🔘 Button Interactions
   if (interaction.isButton()) {

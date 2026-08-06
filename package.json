@@ -10,6 +10,7 @@
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test \"dist/tests/**/*.test.js\"",
     "load": "npm run build && node dist/index.js load"
   },
   "devDependencies": {
@@ -20,6 +21,7 @@
   "author": "SKAST",
   "license": "ISC",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1104.0",
     "@discordjs/opus": "^0.10.0",
     "@discordjs/rest": "^2.6.0",
     "@discordjs/voice": "^0.19.0",
@@ -31,6 +33,7 @@
     "discord.js": "^14.23.2",
     "dotenv": "^16.6.1",
     "ffmpeg-static": "^5.2.0",
+    "mongodb": "^7.5.0",
     "ziplayer": "0.3.13"
   },
   "keywords": [],

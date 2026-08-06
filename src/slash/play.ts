@@ -1,16 +1,24 @@
 import {
   SlashCommandBuilder,
   EmbedBuilder,
+  type ChatInputCommandInteraction,
   type GuildMember,
   type GuildTextBasedChannel,
   type Message,
 } from "discord.js";
-import { getPlayer } from "ziplayer";
 import type { Player, Track } from "ziplayer";
 import { ensurePlayer, ensureConnected, isBusy } from "../utils/player.js";
+import {
+  searchWithFallback,
+  dropCompilations,
+  previewPlaylist,
+} from "../services/playlistImport.js";
+import { isSpotifyUrl } from "../utils/spotify.js";
+import { formatMs } from "../utils/duration.js";
 import { activeSessions, startSessionTicker, addLyricsField } from "./livelyrics.js";
 import type { LiveLyricsSession } from "./livelyrics.js";
 import {
+  COLORS,
   buildNowPlayingEmbed,
   buildControlRows,
   controlStateOf,
@@ -21,18 +29,13 @@ import {
   trackThumbnail,
   isYouTube,
 } from "../utils/embeds.js";
-import {
-  extractYouTubeListId,
-  isYouTubeMix,
-  buildYouTubeSearchCandidates,
-  extractYouTubeVideoId,
-  fetchYouTubeTitle,
-  looksLikeCompilation,
-} from "../utils/youtube.js";
 import type { SlashCommand } from "../types/command.js";
 
 // Các helper URL YouTube đã chuyển sang src/utils/youtube.ts — livelyrics.ts và
 // trackRepair.ts dùng chung, trước đây mỗi file tự có một bản hơi khác nhau.
+//
+// `searchWithFallback` và `dropCompilations` đã chuyển sang services/playlistImport.ts
+// để `/playlist import` dùng chung đúng một cách xử lý Mix và một bộ lọc video tổng hợp.
 
 /**
  * Ảnh cho embed xác nhận "đã thêm vào hàng chờ".
@@ -40,110 +43,70 @@ import type { SlashCommand } from "../types/command.js";
  * YouTube có thumbnail ngang 16:9 nên để ảnh lớn mới đúng khung; nguồn khác thường
  * là bìa vuông, để ảnh lớn sẽ bị crop nên dùng thumbnail bên phải.
  */
-/**
- * Bỏ các video tổng hợp khỏi kết quả playlist/Mix.
- *
- * Feed của YouTube Mix với nhạc Việt phần lớn là playlist 1 tiếng, full album,
- * "TOP 20"... nên nếu đưa hết vào queue thì queue thành một đống playlist chứ
- * không phải từng bài hát.
- *
- * Nếu lọc xong còn dưới 2 bài thì giữ nguyên danh sách gốc: queue ồn còn hơn
- * queue rỗng, và cũng để không kích hoạt sai nhánh "Mix chỉ có một bài".
- */
-function dropCompilations(tracks: Track[]): { tracks: Track[]; droppedCount: number } {
-  const kept = tracks.filter((t) => !looksLikeCompilation(t.title));
-  if (kept.length < 2) {
-    console.log(`[play] bỏ qua bước lọc: chỉ còn ${kept.length}/${tracks.length} bài sau khi lọc`);
-    return { tracks, droppedCount: 0 };
-  }
-  const droppedCount = tracks.length - kept.length;
-  if (droppedCount > 0) {
-    console.log(`[play] đã lọc ${droppedCount}/${tracks.length} video tổng hợp khỏi playlist`);
-    for (const t of tracks.filter((x) => looksLikeCompilation(x.title))) {
-      console.log(`[play]   bỏ: ${t.title}`);
-    }
-  }
-  return { tracks: kept, droppedCount };
-}
-
 function setArtwork(embed: EmbedBuilder, url: string | null | undefined, source?: string): void {
   if (!url) return;
   if (isYouTube(source)) embed.setImage(url);
   else embed.setThumbnail(url);
 }
 
-async function searchWithFallback(
+/** URL video YouTube → Track của ZiPlayer. */
+async function resolveYouTubeUrl(
   player: Player,
-  query: string,
+  url: string,
   requestedBy: string,
-) {
-  const candidates = buildYouTubeSearchCandidates(query);
-  const videoId = extractYouTubeVideoId(query);
-  const wantMix = isYouTubeMix(query);
-  let lastError: unknown = null;
-
-  for (const candidate of candidates) {
-    try {
-      if (candidate !== query) {
-        console.log(`[play] Retry search with fallback candidate: ${candidate}`);
-      }
-      const result = await player.search(candidate, requestedBy);
-
-      console.log("[play debug]", {
-        originalQuery: query,
-        candidate,
-        listId: extractYouTubeListId(query),
-        hasPlaylist: Boolean(result?.playlist),
-        trackCount: result?.tracks?.length ?? 0,
-        firstTracks: result?.tracks?.slice(0, 10).map((track) => ({
-          title: track.title,
-          author: trackAuthor(track),
-          url: track.url,
-        })),
-      });
-
-      if (!result?.tracks?.length) continue;
-
-      // YouTubePlugin vẫn trả `playlist: {name: "YouTube Mix"}` kèm đúng 1 track khi
-      // watch_next_feed rỗng, và không throw. Một bài không phải là Mix thành công.
-      if (wantMix && (!result.playlist || result.tracks.length <= 1)) {
-        console.warn(`[play] YouTube Mix degraded to a single track: ${candidate}`);
-        continue;
-      }
-
-      return result;
-    } catch (err) {
-      lastError = err;
-      console.log(
-        `[play] Search candidate failed: ${candidate} -> ${(err as Error).message}`,
-      );
-    }
+): Promise<Track | null> {
+  try {
+    const result = await player.search(url, requestedBy);
+    return result?.tracks?.[0] ?? null;
+  } catch (err) {
+    console.warn(`[play] không resolve được ${url}: ${(err as Error).message}`);
+    return null;
   }
+}
 
-  // Mix không được hạ cấp sang tìm-theo-tên: đó chính là đường tạo ra queue sai.
-  if (wantMix) throw new Error("YOUTUBE_MIX_DEGRADED");
+/**
+ * Bật panel đang phát + lyrics nếu guild chưa có.
+ *
+ * Tách ra vì cả đường YouTube lẫn đường Spotify đều cần; trước đây khối này nằm
+ * inline ở cuối run() nên nhánh Spotify sẽ không có panel.
+ */
+async function startLiveSession(
+  interaction: ChatInputCommandInteraction,
+  player: Player,
+): Promise<void> {
+  const guildId = interaction.guildId!;
+  if (activeSessions.has(guildId) || !interaction.channel) return;
 
-  // Tất cả URL forms đều fail → thử fetch title qua oEmbed rồi search theo tên
-  if (videoId) {
-    console.log(`[play] All URL variants failed, fetching title via oEmbed for: ${videoId}`);
-    const title = await fetchYouTubeTitle(videoId);
-    if (title) {
-      console.log(`[play] oEmbed title: "${title}", searching by title...`);
-      try {
-        const result = await player.search(title, requestedBy);
-        if (result?.tracks?.length) return result;
-      } catch (err) {
-        console.log(`[play] Title search also failed: ${(err as Error).message}`);
-      }
-    } else {
-      console.log(`[play] oEmbed returned no title (invalid video ID or network error)`);
-    }
-    // oEmbed did not help → throw a user-friendly error instead of raw Lavalink error
-    throw new Error("YOUTUBE_URL_FAILED");
-  }
+  const track = player.currentTrack;
+  if (!track) return;
 
-  if (lastError) throw lastError;
-  return null;
+  const controlRows = buildControlRows(controlStateOf(player));
+  const session: LiveLyricsSession = {
+    active: true,
+    message: undefined as unknown as Message, // gán ngay sau khi gửi
+    embed: new EmbedBuilder(),
+    track,
+    lines: [],
+    lastLine: null,
+    plainShown: false,
+    guildId,
+    controlRows,
+    createdAt: Date.now(),
+    lyricsAttempted: false,
+  };
+
+  const combinedEmbed = buildNowPlayingEmbed(track, player, interaction.user);
+  addLyricsField(combinedEmbed, session, player);
+  session.embed = combinedEmbed;
+
+  session.message = (await (interaction.channel as GuildTextBasedChannel).send({
+    embeds: [combinedEmbed],
+    components: controlRows,
+  })) as Message;
+
+  startSessionTicker(session);
+  activeSessions.set(guildId, session);
+  console.log(`🎤 Auto Live Info+Lyrics enabled for guild: ${guildId}`);
 }
 
 const cmd: SlashCommand = {
@@ -181,24 +144,66 @@ const cmd: SlashCommand = {
       console.log(`🔍 Query: ${query}`);
 
       // Detect Spotify URL and convert to YouTube search
-      const isSpotifyUrl =
-        query.includes("spotify.com/track") ||
-        query.includes("spotify.com/album") ||
-        query.includes("spotify.com/playlist");
+      // ── Spotify ────────────────────────────────────────────────────────────
+      // Spotify không cho stream nên phải khớp sang YouTube. Đường cũ ở đây gọi
+      // `player.search(<link spotify>)` mà không có plugin Spotify nào được đăng
+      // ký, nên nó rơi xuống tìm-theo-tên với nguyên cái URL — không bao giờ ra
+      // đúng bài. Giờ dùng Spotify Web API thật.
+      if (isSpotifyUrl(query)) {
+        const preview = await previewPlaylist(query, interaction.user.id);
+        const tracks = preview.tracks;
+        console.log(`🎵 Spotify → ${tracks.length} bài đã khớp YouTube`);
 
-      if (isSpotifyUrl) {
-        console.log("🎵 Detected Spotify URL, fetching metadata...");
-        const spotifyResult = await player.search(query, interaction.user.id);
-        if (spotifyResult?.tracks.length) {
-          const spotifyMetadata = spotifyResult.tracks[0]!;
-          const searchQuery =
-            `${spotifyMetadata.title} ${spotifyMetadata.author || (spotifyMetadata.metadata?.author ?? "")}`.trim();
-          console.log(`🔄 Converting Spotify to YouTube search: ${searchQuery}`);
-          query = searchQuery;
+        const first = await resolveYouTubeUrl(player, tracks[0]!.url, interaction.user.id);
+        if (!first) return interaction.editReply("❌ Không phát được bài này.");
+
+        if (!isBusy(player)) await player.play(first);
+        else player.queue.add(first);
+
+        const embed = new EmbedBuilder()
+          .setColor(COLORS.spotify)
+          .setTitle(tracks.length > 1 ? "🟢 Đã thêm từ Spotify" : "🟢 Đã thêm vào hàng chờ")
+          .setDescription(
+            tracks.length > 1
+              ? `**${preview.source.title ?? "Spotify"}** — ${tracks.length} bài`
+              : `**[${tracks[0]!.title}](${tracks[0]!.url})**`,
+          )
+          .addFields(
+            { name: "⏱️ Thời lượng", value: formatMs(tracks[0]!.durationMs), inline: true },
+            { name: "👤 Ca sĩ", value: tracks[0]!.author ?? "—", inline: true },
+            { name: "📡 Nguồn", value: "Spotify → YouTube", inline: true },
+          )
+          .setFooter({ text: `Yêu cầu bởi ${interaction.user.tag}` });
+
+        if (preview.droppedCount > 0) {
+          embed.addFields({
+            name: "⚠️ Không khớp được",
+            value: `${preview.droppedCount} bài không tìm thấy trên YouTube`,
+          });
         }
+        setArtwork(embed, tracks[0]!.thumbnail, "spotify");
+        await interaction.editReply({ embeds: [embed] });
+
+        // Nạp phần còn lại ở nền để nhạc kêu ngay, không bắt chờ khớp hết cả album.
+        if (tracks.length > 1) {
+          void (async () => {
+            for (const track of tracks.slice(1)) {
+              const resolved = await resolveYouTubeUrl(player, track.url, interaction.user.id);
+              if (resolved) player.queue.add(resolved);
+            }
+            console.log(`🎵 Spotify: đã nạp xong ${tracks.length} bài`);
+          })();
+        }
+
+        await startLiveSession(interaction, player);
+        return;
       }
 
-      const result = await searchWithFallback(player, query, interaction.user.id);
+      const result = await searchWithFallback(
+        (q, by) => player.search(q, by),
+        query,
+        interaction.user.id,
+      );
 
       if (!result || !result.tracks.length) {
         return interaction.editReply("❌ Không tìm thấy kết quả nào!");
@@ -273,40 +278,7 @@ const cmd: SlashCommand = {
 
       await interaction.editReply({ embeds: [embed] });
 
-      // Auto-enable Live Info + Lyrics
-      const guildId = interaction.guildId!;
-      if (!activeSessions.has(guildId) && interaction.channel) {
-        const track = result.tracks[0]!;
-        const controlRows = buildControlRows(controlStateOf(player));
-
-        const session: LiveLyricsSession = {
-          active: true,
-          message: undefined as unknown as Message, // gán ngay sau khi gửi
-          embed: new EmbedBuilder(),
-          track,
-          lines: [],
-          lastLine: null,
-          plainShown: false,
-          guildId,
-          controlRows,
-          createdAt: Date.now(),
-          lyricsAttempted: false,
-        };
-
-        const combinedEmbed = buildNowPlayingEmbed(track, player, interaction.user);
-        addLyricsField(combinedEmbed, session, player);
-        session.embed = combinedEmbed;
-
-        session.message = (await (interaction.channel as GuildTextBasedChannel).send({
-          embeds: [combinedEmbed],
-          components: controlRows,
-        })) as Message;
-
-        startSessionTicker(session);
-
-        activeSessions.set(guildId, session);
-        console.log(`🎤 Auto Live Info+Lyrics enabled for guild: ${guildId}`);
-      }
+      await startLiveSession(interaction, player);
     } catch (err) {
       const code = (err as Error).message;
       let msg: string;
